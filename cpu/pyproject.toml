@@ -1,0 +1,21 @@
+[project]
+name = "prml-pa4-cpu"
+version = "0.1.0"
+description = "PRML 2026 Assignment 4 CPU Pipeline (CS24B057)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    "scikit-learn>=1.4.0",
+    "opencv-python>=4.9.0",
+    "Pillow>=10.2.0",
+    "torch>=2.2.0",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
