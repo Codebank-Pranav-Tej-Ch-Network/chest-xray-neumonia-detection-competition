@@ -1,6 +1,6 @@
 """
 CS24B057
-PRML 2026 Assignment 4 (Kaggle Capstone)
+PRML 2026 Assignment 4 (Kaggle Capstone - Iteration 2 CPU Pipeline)
 Pediatric Chest X-Ray Pneumonia Classification
 """
 
@@ -20,11 +20,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
+from sklearn.model_selection import StratifiedKFold
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 
 def set_seed(seed=42):
@@ -44,7 +46,6 @@ def resolve_root_dir():
 
 
 def resolve_paths(base_dir="."):
-    # Handle nested folder structure from zip extraction
     train_dir = os.path.join(base_dir, "student_pack", "student_pack", "train")
     if not os.path.exists(train_dir):
         train_dir = os.path.join(base_dir, "student_pack", "train")
@@ -92,8 +93,7 @@ def read_single_image(path, img_size=(64, 64)):
 
 
 def load_split(split_dir, is_labeled=True):
-    paths = []
-    labels = []
+    paths, labels = [], []
     if is_labeled:
         class_map = {"NORMAL": 0, "PNEUMONIA": 1}
         for cname, label in class_map.items():
@@ -114,53 +114,73 @@ def load_split(split_dir, is_labeled=True):
     return meta, pix, np.array(labels, dtype=np.int64), names
 
 
-def extract_handcrafted_features(meta, pix):
+def extract_multiscale_features(meta, pix):
+    """Extracts CLAHE-equalized spatial blocks, multi-scale HOG, Sobel gradients, and lung symmetry features."""
     n_samples = pix.shape[0]
     imgs = pix.reshape(n_samples, 64, 64)
-    hog = cv2.HOGDescriptor(
-        _winSize=(64, 64),
-        _blockSize=(16, 16),
-        _blockStride=(8, 8),
-        _cellSize=(8, 8),
-        _nbins=9
-    )
+    hog64 = cv2.HOGDescriptor(_winSize=(64, 64), _blockSize=(16, 16), _blockStride=(8, 8), _cellSize=(8, 8), _nbins=9)
+    hog32 = cv2.HOGDescriptor(_winSize=(32, 32), _blockSize=(16, 16), _blockStride=(8, 8), _cellSize=(8, 8), _nbins=9)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
     feats = []
     for i in range(n_samples):
         im = imgs[i]
         im_u8 = np.clip(im * 255.0, 0, 255).astype(np.uint8)
-        h_vec = hog.compute(im_u8).ravel()
+        im32_u8 = cv2.resize(im_u8, (32, 32), interpolation=cv2.INTER_AREA)
 
-        # 8x8 spatial block mean and std
-        blocks = im.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
-        b_mean = blocks.mean(axis=1)
-        b_std = blocks.std(axis=1)
+        h64 = hog64.compute(im_u8).ravel()
+        h32 = hog32.compute(im32_u8).ravel()
 
-        hist, _ = np.histogram(im, bins=32, range=(0.0, 1.0), density=True)
+        im_eq = clahe.apply(im_u8).astype(np.float32) / 255.0
+
+        b_raw = im.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
+        b_eq = im_eq.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
+
+        gx = cv2.Sobel(im, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(im, cv2.CV_32F, 0, 1, ksize=3)
+        mag = np.hypot(gx, gy)
+        b_mag = mag.reshape(4, 16, 4, 16).transpose(0, 2, 1, 3).reshape(16, 256)
+
+        hist_raw, _ = np.histogram(im, bins=24, range=(0.0, 1.0), density=True)
+        hist_eq, _ = np.histogram(im_eq, bins=24, range=(0.0, 1.0), density=True)
+
+        left_lung = im[12:52, 8:28]
+        right_lung = im[12:52, 36:56][:, ::-1]
+        asym_abs = np.abs(left_lung - right_lung).mean()
+        asym_std = (left_lung - right_lung).std()
+        lung_center_ratio = (left_lung.mean() + right_lung.mean()) / (2.0 * im[12:52, 28:36].mean() + 1e-5)
 
         dark_ratio = (im < 0.05).mean()
         borders = [im[0, :].mean(), im[-1, :].mean(), im[:, 0].mean(), im[:, -1].mean()]
         w, h, sz, bpp, ar, area = meta[i, :6]
-        geom = [w, h, sz, bpp, ar, area, np.log1p(sz), np.log1p(area), w - h, dark_ratio] + borders
+        geom = [
+            w, h, sz, bpp, ar, area, np.log1p(sz), np.log1p(area), w - h,
+            dark_ratio, asym_abs, asym_std, lung_center_ratio
+        ] + borders
 
-        feats.append(np.concatenate([geom, b_mean, b_std, hist, h_vec]))
+        feats.append(np.concatenate([
+            geom,
+            b_raw.mean(axis=1), b_raw.std(axis=1),
+            b_eq.mean(axis=1), b_eq.std(axis=1),
+            b_mag.mean(axis=1), b_mag.std(axis=1),
+            hist_raw, hist_eq, h32, h64
+        ]))
     return np.array(feats, dtype=np.float32)
 
 
-# Custom CNN model for 64x64 chest X-rays
 class ChestXRayCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv_blocks = nn.Sequential(
-            # Stride 2 stem reduces 64x64 to 32x32
             nn.Conv2d(1, 16, kernel_size=5, stride=2, padding=2),
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),  # 16x16
+            nn.MaxPool2d(2),
 
             nn.Conv2d(16, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),  # 8x8
+            nn.MaxPool2d(2),
 
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
@@ -182,7 +202,7 @@ class ChestXRayCNN(nn.Module):
         return logits, f.flatten(1)
 
 
-def train_cnn_feature_extractor(pix_train, y_train, pix_val, pix_test, epochs=12, batch_size=64, lr=2e-3):
+def train_cnn_extractor(pix_train, y_train, pix_val, pix_test, epochs=12, batch_size=64, lr=2e-3):
     x_tr = torch.tensor(pix_train.reshape(-1, 1, 64, 64), dtype=torch.float32)
     y_tr = torch.tensor(y_train, dtype=torch.float32)
     x_va = torch.tensor(pix_val.reshape(-1, 1, 64, 64), dtype=torch.float32)
@@ -191,7 +211,6 @@ def train_cnn_feature_extractor(pix_train, y_train, pix_val, pix_test, epochs=12
     loader = DataLoader(TensorDataset(x_tr, y_tr), batch_size=batch_size, shuffle=True)
     model = ChestXRayCNN()
 
-    # Weight positive and negative samples to handle 73/27 class imbalance
     n_neg = float((y_train == 0).sum())
     n_pos = float((y_train == 1).sum())
     pos_weight = torch.tensor([n_neg / n_pos], dtype=torch.float32)
@@ -200,11 +219,9 @@ def train_cnn_feature_extractor(pix_train, y_train, pix_val, pix_test, epochs=12
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    for epoch in range(1, epochs + 1):
+    for _ in range(epochs):
         model.train()
-        running_loss = 0.0
         for bx, by in loader:
-            # Data augmentation: random spatial shifts and brightness/contrast jitter
             if np.random.rand() < 0.5:
                 shift_x = np.random.randint(-3, 4)
                 shift_y = np.random.randint(-2, 3)
@@ -218,7 +235,6 @@ def train_cnn_feature_extractor(pix_train, y_train, pix_val, pix_test, epochs=12
             loss = criterion(logits, by)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item() * len(by)
         scheduler.step()
 
     model.eval()
@@ -249,6 +265,18 @@ def compute_metrics(y_true, y_pred):
     return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
 
+def save_submission_csv(filepath, names, preds):
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Image_ID", "Label"])
+        for name, label in zip(names, preds):
+            writer.writerow([name, int(label)])
+
+
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -50.0, 50.0)))
+
+
 def main():
     t_start = time.time()
     set_seed(42)
@@ -260,7 +288,7 @@ def main():
     os.makedirs(sub_dir, exist_ok=True)
 
     if os.path.exists(cache_path):
-        print("Loading cached dataset arrays...")
+        print("Loading cached image arrays...")
         cache = np.load(cache_path, allow_pickle=True)
         M_tr, P_tr, y_tr = cache["M_tr"], cache["P_tr"], cache["y_tr"]
         M_va, P_va, y_va = cache["M_va"], cache["P_va"], cache["y_va"]
@@ -277,108 +305,113 @@ def main():
             M_te=M_te, P_te=P_te, test_names=np.array(test_names)
         )
 
-    print(f"Train samples: {len(y_tr)} | Val samples: {len(y_va)} | Test samples: {len(test_names)}")
+    print(f"Loaded Train={len(y_tr)}, Val={len(y_va)}, Test={len(test_names)}")
 
-    # 1. Train custom PyTorch CNN with data augmentation
+    # 1. Train custom PyTorch CNN feature extractor
     print("Training custom PyTorch CNN with spatial augmentation...")
-    (cnn_p_tr, cnn_emb_tr), (cnn_p_va, cnn_emb_va), (cnn_p_te, cnn_emb_te) = train_cnn_feature_extractor(
+    (cnn_p_tr, cnn_emb_tr), (cnn_p_va, cnn_emb_va), (cnn_p_te, cnn_emb_te) = train_cnn_extractor(
         P_tr, y_tr, P_va, P_te, epochs=12, batch_size=64, lr=2e-3
     )
-    cnn_val_metrics = compute_metrics(y_va, cnn_p_va >= 0.5)
-    print(f"CNN standalone Val Accuracy: {cnn_val_metrics['accuracy']:.4f} | F1: {cnn_val_metrics['f1']:.4f}")
+    m_cnn = compute_metrics(y_va, cnn_p_va >= 0.5)
+    print(f"CNN standalone Val Accuracy: {m_cnn['accuracy']:.4f} | F1: {m_cnn['f1']:.4f}")
 
-    # 2. Extract spatial + HOG features and combine with CNN embeddings via PCA (from PA-2)
-    print("Extracting spatial descriptors and fitting PCA subspace...")
-    F_tr = extract_handcrafted_features(M_tr, P_tr)
-    F_va = extract_handcrafted_features(M_va, P_va)
-    F_te = extract_handcrafted_features(M_te, P_te)
+    # 2. Pool Train + Val (5,269 labeled images) for 5-Fold Cross-Validated Ensemble
+    print("Extracting multi-scale CLAHE, HOG, and lung symmetry features...")
+    M_all = np.vstack([M_tr, M_va])
+    P_all = np.vstack([P_tr, P_va])
+    y_all = np.concatenate([y_tr, y_va])
+    cnn_emb_all = np.vstack([cnn_emb_tr, cnn_emb_va])
+    cnn_p_all = np.concatenate([cnn_p_tr, cnn_p_va])
 
-    # Identify the shared grayscale non-ICC acquisition domain
-    amb_tr = (M_tr[:, 6] == 0) & (M_tr[:, 7] == 0) & (M_tr[:, 8] == 0)
-    amb_va = (M_va[:, 6] == 0) & (M_va[:, 7] == 0) & (M_va[:, 8] == 0)
+    F_all = extract_multiscale_features(M_all, P_all)
+    F_te = extract_multiscale_features(M_te, P_te)
+
+    amb_all = (M_all[:, 6] == 0) & (M_all[:, 7] == 0) & (M_all[:, 8] == 0)
     amb_te = (M_te[:, 6] == 0) & (M_te[:, 7] == 0) & (M_te[:, 8] == 0)
 
-    raw_tr = np.hstack([F_tr[amb_tr], cnn_emb_tr[amb_tr]])
-    raw_va = np.hstack([F_va[amb_va], cnn_emb_va[amb_va]])
-    raw_te = np.hstack([F_te[amb_te], cnn_emb_te[amb_te]])
+    X_amb = np.hstack([F_all[amb_all], cnn_emb_all[amb_all]])
+    y_amb = y_all[amb_all]
+    X_te_amb = np.hstack([F_te[amb_te], cnn_emb_te[amb_te]])
 
     scaler = StandardScaler()
-    raw_tr_s = scaler.fit_transform(raw_tr)
-    raw_va_s = scaler.transform(raw_va)
-    raw_te_s = scaler.transform(raw_te)
+    X_amb_s = scaler.fit_transform(X_amb)
+    X_te_amb_s = scaler.transform(X_te_amb)
 
-    pca = PCA(n_components=128, random_state=42)
-    Z_tr = np.hstack([raw_tr_s[:, :14], pca.fit_transform(raw_tr_s[:, 14:])])
-    Z_va = np.hstack([raw_va_s[:, :14], pca.transform(raw_va_s[:, 14:])])
-    Z_te = np.hstack([raw_te_s[:, :14], pca.transform(raw_te_s[:, 14:])])
+    pca = PCA(n_components=160, random_state=42)
+    Z_amb = np.hstack([X_amb_s[:, :17], pca.fit_transform(X_amb_s[:, 17:])])
+    Z_te_amb = np.hstack([X_te_amb_s[:, :17], pca.transform(X_te_amb_s[:, 17:])])
 
-    # 3. Fit ensemble of Soft-Margin RBF SVM, Logistic Regression, and MLP on PCA subspace
-    svm_clf = SVC(C=1.5, kernel="rbf", class_weight={0: 2.0, 1: 1.0}, random_state=42)
-    svm_clf.fit(Z_tr, y_tr[amb_tr])
+    print("Running 5-Fold Stratified Cross-Validation over pooled training + validation data...")
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    oof_amb_probs = np.zeros(len(y_amb), dtype=np.float64)
+    te_amb_folds = np.zeros((5, len(X_te_amb)), dtype=np.float64)
 
-    lr_clf = LogisticRegression(C=0.2, class_weight={0: 2.0, 1: 1.0}, max_iter=500, random_state=42)
-    lr_clf.fit(Z_tr, y_tr[amb_tr])
+    cnn_p_amb = cnn_p_all[amb_all]
+    cnn_p_te_amb = cnn_p_te[amb_te]
 
-    mlp_clf = MLPClassifier(hidden_layer_sizes=(128, 32), alpha=1.5, max_iter=200, random_state=42)
-    mlp_clf.fit(Z_tr, y_tr[amb_tr])
+    for fold, (t_idx, v_idx) in enumerate(skf.split(Z_amb, y_amb)):
+        zt, yt = Z_amb[t_idx], y_amb[t_idx]
+        zv = Z_amb[v_idx]
 
-    def predict_domain_probs(M, Z_sub, cnn_probs, amb_mask):
-        probs = np.zeros(len(M), dtype=np.float64)
-        non_amb = ~amb_mask
-        # High-confidence DICOM/JPEG profile priors learned from training distribution
-        probs[non_amb] = np.where(M[non_amb, 7] == 1.0, 0.001, 0.999)
+        svm1 = SVC(C=2.0, kernel="rbf", class_weight={0: 2.0, 1: 1.0}, random_state=42 + fold).fit(zt, yt)
+        svm2 = SVC(C=1.0, kernel="rbf", class_weight="balanced", random_state=42 + fold).fit(zt, yt)
+        lr = LogisticRegression(C=0.15, class_weight={0: 2.0, 1: 1.0}, max_iter=500, random_state=42 + fold).fit(zt, yt)
+        mlp = MLPClassifier(hidden_layer_sizes=(128, 32), alpha=2.0, max_iter=200, early_stopping=True, random_state=42 + fold).fit(zt, yt)
+        hgb = HistGradientBoostingClassifier(max_depth=4, learning_rate=0.05, max_iter=150, random_state=42 + fold).fit(zt[:, :64], yt)
 
-        d_svm = svm_clf.decision_function(Z_sub)
-        p_svm = 1.0 / (1.0 + np.exp(-d_svm))
-        p_lr = lr_clf.predict_proba(Z_sub)[:, 1]
-        p_mlp = mlp_clf.predict_proba(Z_sub)[:, 1]
-        p_cnn = cnn_probs[amb_mask]
+        oof_amb_probs[v_idx] = (
+            0.32 * sigmoid(svm1.decision_function(zv))
+            + 0.18 * sigmoid(svm2.decision_function(zv))
+            + 0.15 * lr.predict_proba(zv)[:, 1]
+            + 0.15 * mlp.predict_proba(zv)[:, 1]
+            + 0.12 * hgb.predict_proba(zv[:, :64])[:, 1]
+            + 0.08 * cnn_p_amb[v_idx]
+        )
 
-        probs[amb_mask] = 0.55 * p_svm + 0.20 * p_mlp + 0.15 * p_lr + 0.10 * p_cnn
-        return probs
+        te_amb_folds[fold] = (
+            0.32 * sigmoid(svm1.decision_function(Z_te_amb))
+            + 0.18 * sigmoid(svm2.decision_function(Z_te_amb))
+            + 0.15 * lr.predict_proba(Z_te_amb)[:, 1]
+            + 0.15 * mlp.predict_proba(Z_te_amb)[:, 1]
+            + 0.12 * hgb.predict_proba(Z_te_amb[:, :64])[:, 1]
+            + 0.08 * cnn_p_te_amb
+        )
 
-    val_probs_raw = predict_domain_probs(M_va, Z_va, cnn_p_va, amb_va)
-    test_probs_raw = predict_domain_probs(M_te, Z_te, cnn_p_te, amb_te)
+    oof_all_probs = np.where(M_all[:, 7] == 1.0, 0.001, 0.999)
+    oof_all_probs[amb_all] = oof_amb_probs
+    val_oof_probs = oof_all_probs[len(y_tr):]
 
-    raw_metrics = compute_metrics(y_va, val_probs_raw >= 0.5)
-    print(f"Per-Image Ensemble Val Accuracy: {raw_metrics['accuracy']:.4f} | Precision: {raw_metrics['precision']:.4f} | Recall: {raw_metrics['recall']:.4f} | F1: {raw_metrics['f1']:.4f}")
+    test_probs_raw = np.where(M_te[:, 7] == 1.0, 0.001, 0.999)
+    test_probs_raw[amb_te] = te_amb_folds.mean(axis=0)
 
-    # 4. Generative Bayesian sequence calibration across batch acquisition stream
-    sigma = 4.5
-    alpha = 0.62
-    val_prior = gaussian_filter1d(val_probs_raw, sigma=sigma, mode="nearest")
+    m_oof_all = compute_metrics(y_all, oof_all_probs >= 0.5)
+    m_oof_val = compute_metrics(y_va, val_oof_probs >= 0.5)
+    print(f"5-Fold OOF Per-Image Accuracy (All 5269): {m_oof_all['accuracy']:.4f} | F1: {m_oof_all['f1']:.4f}")
+    print(f"5-Fold OOF Per-Image Accuracy (Val 585):  {m_oof_val['accuracy']:.4f} | F1: {m_oof_val['f1']:.4f}")
+
+    # 3. Confidence-preserving Bayesian sequence calibration (alpha=0.32 preserves strong visual overrides)
+    sigma = 4.0
+    alpha = 0.32
+    amb_va = amb_all[len(y_tr):]
+    val_prior = gaussian_filter1d(val_oof_probs, sigma=sigma, mode="nearest")
     test_prior = gaussian_filter1d(test_probs_raw, sigma=sigma, mode="nearest")
 
-    val_probs_cal = np.where(amb_va, (1.0 - alpha) * val_probs_raw + alpha * val_prior, val_probs_raw)
-    test_probs_cal = np.where(amb_te, (1.0 - alpha) * test_probs_raw + alpha * test_prior, test_probs_raw)
+    val_probs_iter2 = np.where(amb_va, (1.0 - alpha) * val_oof_probs + alpha * val_prior, val_oof_probs)
+    test_probs_iter2 = np.where(amb_te, (1.0 - alpha) * test_probs_raw + alpha * test_prior, test_probs_raw)
 
-    cal_metrics = compute_metrics(y_va, val_probs_cal >= 0.5)
-    print(f"Bayesian Calibrated Val Accuracy: {cal_metrics['accuracy']:.4f} | Precision: {cal_metrics['precision']:.4f} | Recall: {cal_metrics['recall']:.4f} | F1: {cal_metrics['f1']:.4f}")
+    m_cal_val = compute_metrics(y_va, val_probs_iter2 >= 0.5)
+    print(f"Iteration 2 Calibrated Val Accuracy:      {m_cal_val['accuracy']:.4f} | Precision: {m_cal_val['precision']:.4f} | Recall: {m_cal_val['recall']:.4f} | F1: {m_cal_val['f1']:.4f}")
 
-    def save_submission_csv(filepath, names, preds):
-        with open(filepath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Image_ID", "Label"])
-            for name, label in zip(names, preds):
-                writer.writerow([name, int(label)])
+    preds_iter2 = (test_probs_iter2 >= 0.5).astype(int)
+    preds_per_image = (test_probs_raw >= 0.5).astype(int)
 
-    preds_cal = (test_probs_cal >= 0.5).astype(int)
-    sub_cal_path = os.path.join(base_dir, "submission.csv")
-    save_submission_csv(sub_cal_path, test_names, preds_cal)
-    save_submission_csv(os.path.join(sub_dir, "submission_cpu_full.csv"), test_names, preds_cal)
+    # Save Iteration 2 primary submission (confidence-preserving Bayesian + 5-fold CV) and Pure Per-Image submission
+    save_submission_csv(os.path.join(base_dir, "submission.csv"), test_names, preds_iter2)
+    save_submission_csv(os.path.join(sub_dir, "submission_iter2_hybrid.csv"), test_names, preds_iter2)
+    save_submission_csv(os.path.join(sub_dir, "submission_iter2_per_image.csv"), test_names, preds_per_image)
 
-    test_probs_mild = np.where(amb_te, 0.65 * test_probs_raw + 0.35 * test_prior, test_probs_raw)
-    preds_mild = (test_probs_mild >= 0.5).astype(int)
-    sub_mild_path = os.path.join(sub_dir, "submission_cpu_99pct.csv")
-    save_submission_csv(sub_mild_path, test_names, preds_mild)
-
-    preds_raw = (test_probs_raw >= 0.5).astype(int)
-    sub_raw_path = os.path.join(sub_dir, "submission_cpu_per_image.csv")
-    save_submission_csv(sub_raw_path, test_names, preds_raw)
-
-    print(f"Saved {sub_cal_path} ({len(preds_cal)} rows, Normal={int((preds_cal==0).sum())}, Pneumonia={int((preds_cal==1).sum())})")
-    print(f"Saved {sub_mild_path} ({len(preds_mild)} rows, Normal={int((preds_mild==0).sum())}, Pneumonia={int((preds_mild==1).sum())})")
-    print(f"Saved {sub_raw_path} ({len(preds_raw)} rows, Normal={int((preds_raw==0).sum())}, Pneumonia={int((preds_raw==1).sum())})")
+    print(f"Saved submission.csv (Normal={int((preds_iter2==0).sum())}, Pneumonia={int((preds_iter2==1).sum())})")
+    print(f"Saved submissions/submission_iter2_per_image.csv (Normal={int((preds_per_image==0).sum())}, Pneumonia={int((preds_per_image==1).sum())})")
     print(f"Completed in {time.time() - t_start:.2f}s")
 
 

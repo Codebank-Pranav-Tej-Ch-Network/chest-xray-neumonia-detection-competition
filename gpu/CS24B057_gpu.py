@@ -23,11 +23,13 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import torchvision.models as models
 
+from sklearn.model_selection import StratifiedKFold
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 
 def set_seed(seed=42):
@@ -347,27 +349,38 @@ def train_and_extract_gpu_model(
 def extract_handcrafted_features(meta, pix64):
     n_samples = pix64.shape[0]
     imgs = pix64.reshape(n_samples, 64, 64)
-    hog = cv2.HOGDescriptor(
-        _winSize=(64, 64),
-        _blockSize=(16, 16),
-        _blockStride=(8, 8),
-        _cellSize=(8, 8),
-        _nbins=9
-    )
+    hog64 = cv2.HOGDescriptor(_winSize=(64, 64), _blockSize=(16, 16), _blockStride=(8, 8), _cellSize=(8, 8), _nbins=9)
+    hog32 = cv2.HOGDescriptor(_winSize=(32, 32), _blockSize=(16, 16), _blockStride=(8, 8), _cellSize=(8, 8), _nbins=9)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     feats = []
     for i in range(n_samples):
         im = imgs[i]
         im_u8 = np.clip(im * 255.0, 0, 255).astype(np.uint8)
-        h_vec = hog.compute(im_u8).ravel()
-        blocks = im.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
-        b_mean = blocks.mean(axis=1)
-        b_std = blocks.std(axis=1)
-        hist, _ = np.histogram(im, bins=32, range=(0.0, 1.0), density=True)
+        im32_u8 = cv2.resize(im_u8, (32, 32), interpolation=cv2.INTER_AREA)
+        h64 = hog64.compute(im_u8).ravel()
+        h32 = hog32.compute(im32_u8).ravel()
+        im_eq = clahe.apply(im_u8).astype(np.float32) / 255.0
+        b_raw = im.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
+        b_eq = im_eq.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
+        gx = cv2.Sobel(im, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(im, cv2.CV_32F, 0, 1, ksize=3)
+        mag = np.hypot(gx, gy)
+        b_mag = mag.reshape(4, 16, 4, 16).transpose(0, 2, 1, 3).reshape(16, 256)
+        hist_raw, _ = np.histogram(im, bins=24, range=(0.0, 1.0), density=True)
+        hist_eq, _ = np.histogram(im_eq, bins=24, range=(0.0, 1.0), density=True)
+        left_lung = im[12:52, 8:28]
+        right_lung = im[12:52, 36:56][:, ::-1]
+        asym_abs = np.abs(left_lung - right_lung).mean()
+        asym_std = (left_lung - right_lung).std()
+        lung_center_ratio = (left_lung.mean() + right_lung.mean()) / (2.0 * im[12:52, 28:36].mean() + 1e-5)
         dark_ratio = (im < 0.05).mean()
         borders = [im[0, :].mean(), im[-1, :].mean(), im[:, 0].mean(), im[:, -1].mean()]
         w, h, sz, bpp, ar, area = meta[i, :6]
-        geom = [w, h, sz, bpp, ar, area, np.log1p(sz), np.log1p(area), w - h, dark_ratio] + borders
-        feats.append(np.concatenate([geom, b_mean, b_std, hist, h_vec]))
+        geom = [w, h, sz, bpp, ar, area, np.log1p(sz), np.log1p(area), w - h, dark_ratio, asym_abs, asym_std, lung_center_ratio] + borders
+        feats.append(np.concatenate([
+            geom, b_raw.mean(axis=1), b_raw.std(axis=1), b_eq.mean(axis=1), b_eq.std(axis=1),
+            b_mag.mean(axis=1), b_mag.std(axis=1), hist_raw, hist_eq, h32, h64
+        ]))
     return np.array(feats, dtype=np.float32)
 
 
@@ -453,47 +466,69 @@ def main():
     F_va = extract_handcrafted_features(M_va, P_va)
     F_te = extract_handcrafted_features(M_te, P_te)
 
-    amb_tr = (M_tr[:, 6] == 0) & (M_tr[:, 7] == 0) & (M_tr[:, 8] == 0)
+    M_all = np.vstack([M_tr, M_va])
+    F_all = np.vstack([F_tr, F_va])
+    y_all = np.concatenate([y_tr, y_va])
+    cnn_p_all = np.concatenate([cnn_p_tr, cnn_p_va])
+    cnn_emb_all = np.vstack([cnn_emb_tr, cnn_emb_va])
+
+    amb_all = (M_all[:, 6] == 0) & (M_all[:, 7] == 0) & (M_all[:, 8] == 0)
     amb_va = (M_va[:, 6] == 0) & (M_va[:, 7] == 0) & (M_va[:, 8] == 0)
     amb_te = (M_te[:, 6] == 0) & (M_te[:, 7] == 0) & (M_te[:, 8] == 0)
 
-    raw_tr = np.hstack([F_tr[amb_tr], cnn_emb_tr[amb_tr]])
-    raw_va = np.hstack([F_va[amb_va], cnn_emb_va[amb_va]])
+    raw_all = np.hstack([F_all[amb_all], cnn_emb_all[amb_all]])
     raw_te = np.hstack([F_te[amb_te], cnn_emb_te[amb_te]])
+    y_amb = y_all[amb_all]
+    cnn_p_amb = cnn_p_all[amb_all]
+    cnn_p_te_amb = cnn_p_te[amb_te]
 
     scaler = StandardScaler()
-    raw_tr_s = scaler.fit_transform(raw_tr)
-    raw_va_s = scaler.transform(raw_va)
+    raw_all_s = scaler.fit_transform(raw_all)
     raw_te_s = scaler.transform(raw_te)
 
-    pca = PCA(n_components=128, random_state=42)
-    Z_tr = np.hstack([raw_tr_s[:, :14], pca.fit_transform(raw_tr_s[:, 14:])])
-    Z_va = np.hstack([raw_va_s[:, :14], pca.transform(raw_va_s[:, 14:])])
-    Z_te = np.hstack([raw_te_s[:, :14], pca.transform(raw_te_s[:, 14:])])
+    pca = PCA(n_components=180, random_state=42)
+    Z_all = np.hstack([raw_all_s[:, :17], pca.fit_transform(raw_all_s[:, 17:])])
+    Z_te = np.hstack([raw_te_s[:, :17], pca.transform(raw_te_s[:, 17:])])
 
-    svm_clf = SVC(C=1.5, kernel="rbf", class_weight={0: 2.0, 1: 1.0}, random_state=42).fit(Z_tr, y_tr[amb_tr])
-    lr_clf = LogisticRegression(C=0.2, class_weight={0: 2.0, 1: 1.0}, max_iter=500, random_state=42).fit(Z_tr, y_tr[amb_tr])
-    mlp_clf = MLPClassifier(hidden_layer_sizes=(128, 32), alpha=1.5, max_iter=200, random_state=42).fit(Z_tr, y_tr[amb_tr])
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    oof_probs_amb = np.zeros(len(y_amb), dtype=np.float64)
+    te_probs_amb = np.zeros(len(Z_te), dtype=np.float64)
 
-    def predict_domain_probs(M, Z_sub, cnn_probs, amb_mask):
-        probs = np.zeros(len(M), dtype=np.float64)
-        non_amb = ~amb_mask
-        probs[non_amb] = np.where(M[non_amb, 7] == 1.0, 0.001, 0.999)
-        d_svm = svm_clf.decision_function(Z_sub)
-        p_svm = 1.0 / (1.0 + np.exp(-d_svm))
-        p_lr = lr_clf.predict_proba(Z_sub)[:, 1]
-        p_mlp = mlp_clf.predict_proba(Z_sub)[:, 1]
-        p_cnn = cnn_probs[amb_mask]
-        probs[amb_mask] = 0.45 * p_svm + 0.25 * p_cnn + 0.15 * p_mlp + 0.15 * p_lr
-        return probs
+    for fold_idx, (tr_idx, va_idx) in enumerate(skf.split(Z_all, y_amb), 1):
+        X_f_tr, y_f_tr = Z_all[tr_idx], y_amb[tr_idx]
+        X_f_va = Z_all[va_idx]
 
-    val_probs_raw = predict_domain_probs(M_va, Z_va, cnn_p_va, amb_va)
-    test_probs_raw = predict_domain_probs(M_te, Z_te, cnn_p_te, amb_te)
+        svm_clf = SVC(C=2.2, kernel="rbf", class_weight={0: 2.2, 1: 1.0}, random_state=42 + fold_idx).fit(X_f_tr, y_f_tr)
+        lr_clf = LogisticRegression(C=0.25, class_weight={0: 2.2, 1: 1.0}, max_iter=600, random_state=42 + fold_idx).fit(X_f_tr, y_f_tr)
+        mlp_clf = MLPClassifier(hidden_layer_sizes=(160, 48), alpha=1.2, max_iter=250, random_state=42 + fold_idx).fit(X_f_tr, y_f_tr)
+        hgb_clf = HistGradientBoostingClassifier(max_iter=200, learning_rate=0.05, max_leaf_nodes=31, class_weight={0: 2.2, 1: 1.0}, random_state=42 + fold_idx).fit(X_f_tr, y_f_tr)
 
+        def blend_fold(X_eval, p_cnn_eval):
+            d_svm = svm_clf.decision_function(X_eval)
+            p_svm = 1.0 / (1.0 + np.exp(-d_svm))
+            p_lr = lr_clf.predict_proba(X_eval)[:, 1]
+            p_mlp = mlp_clf.predict_proba(X_eval)[:, 1]
+            p_hgb = hgb_clf.predict_proba(X_eval)[:, 1]
+            return 0.40 * p_svm + 0.25 * p_cnn_eval + 0.15 * p_mlp + 0.10 * p_hgb + 0.10 * p_lr
+
+        oof_probs_amb[va_idx] = blend_fold(X_f_va, cnn_p_amb[va_idx])
+        te_probs_amb += blend_fold(Z_te, cnn_p_te_amb) / 5.0
+
+    oof_probs_all = np.zeros(len(y_all), dtype=np.float64)
+    oof_probs_all[~amb_all] = np.where(M_all[~amb_all, 7] == 1.0, 0.001, 0.999)
+    oof_probs_all[amb_all] = oof_probs_amb
+
+    val_probs_raw = oof_probs_all[len(y_tr):]
+    test_probs_raw = np.zeros(len(M_te), dtype=np.float64)
+    test_probs_raw[~amb_te] = np.where(M_te[~amb_te, 7] == 1.0, 0.001, 0.999)
+    test_probs_raw[amb_te] = te_probs_amb
+
+    oof_metrics = compute_metrics(y_all, oof_probs_all >= 0.5)
     raw_metrics = compute_metrics(y_va, val_probs_raw >= 0.5)
-    print(f"Per-Image GPU Hybrid Val Accuracy: {raw_metrics['accuracy']:.4f} | F1: {raw_metrics['f1']:.4f}")
+    print(f"5-Fold OOF All (5269 imgs) Accuracy: {oof_metrics['accuracy']:.4f} | F1: {oof_metrics['f1']:.4f}")
+    print(f"Per-Image GPU Hybrid Val Accuracy:   {raw_metrics['accuracy']:.4f} | F1: {raw_metrics['f1']:.4f}")
 
-    sigma, alpha = 4.5, 0.62
+    sigma, alpha = 4.5, 0.30
     val_prior = gaussian_filter1d(val_probs_raw, sigma=sigma, mode="nearest")
     test_prior = gaussian_filter1d(test_probs_raw, sigma=sigma, mode="nearest")
 
