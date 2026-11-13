@@ -11,10 +11,9 @@ import time
 import random
 from concurrent.futures import ThreadPoolExecutor
 
-import cv2
 import numpy as np
 from PIL import Image
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, sobel, uniform_filter
 
 import torch
 import torch.nn as nn
@@ -115,57 +114,83 @@ def load_split(split_dir, is_labeled=True):
 
 
 def extract_multiscale_features(meta, pix):
-    """Extracts CLAHE-equalized spatial blocks, multi-scale HOG, Sobel gradients, and lung symmetry features."""
-    n_samples = pix.shape[0]
-    imgs = pix.reshape(n_samples, 64, 64)
-    hog64 = cv2.HOGDescriptor(_winSize=(64, 64), _blockSize=(16, 16), _blockStride=(8, 8), _cellSize=(8, 8), _nbins=9)
-    hog32 = cv2.HOGDescriptor(_winSize=(32, 32), _blockSize=(16, 16), _blockStride=(8, 8), _cellSize=(8, 8), _nbins=9)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    """
+    Pure vectorized NumPy/SciPy radiographic feature extractor (no OpenCV dependency).
+    Extracts local adaptive contrast normalization, multi-scale 64x64 and 32x32 HOG descriptors,
+    Sobel gradient magnitude grids, intensity histograms, and bilateral lung symmetry features.
+    """
+    n = pix.shape[0]
+    imgs = pix.reshape(n, 64, 64).astype(np.float32)
 
-    feats = []
-    for i in range(n_samples):
-        im = imgs[i]
-        im_u8 = np.clip(im * 255.0, 0, 255).astype(np.uint8)
-        im32_u8 = cv2.resize(im_u8, (32, 32), interpolation=cv2.INTER_AREA)
+    local_mean = uniform_filter(imgs, size=(1, 16, 16))
+    local_sq_mean = uniform_filter(imgs * imgs, size=(1, 16, 16))
+    local_std = np.sqrt(np.maximum(local_sq_mean - local_mean * local_mean, 1e-5))
+    imgs_eq = np.clip((imgs - local_mean) / (local_std + 0.08), -3.0, 3.0)
+    imgs_eq = (imgs_eq + 3.0) / 6.0
 
-        h64 = hog64.compute(im_u8).ravel()
-        h32 = hog32.compute(im32_u8).ravel()
+    gx = sobel(imgs, axis=2)
+    gy = sobel(imgs, axis=1)
+    mag = np.hypot(gx, gy)
+    ori = (np.rad2deg(np.arctan2(gy, gx)) % 180.0)
 
-        im_eq = clahe.apply(im_u8).astype(np.float32) / 255.0
+    n_bins = 9
+    bin_idx = np.clip((ori / (180.0 / n_bins)).astype(np.int32), 0, n_bins - 1)
+    cell_hists = np.zeros((n, 8, 8, n_bins), dtype=np.float32)
+    mag_cells = mag.reshape(n, 8, 8, 8, 8).transpose(0, 1, 3, 2, 4).reshape(n, 8, 8, 64)
+    bin_cells = bin_idx.reshape(n, 8, 8, 8, 8).transpose(0, 1, 3, 2, 4).reshape(n, 8, 8, 64)
+    for b in range(n_bins):
+        cell_hists[:, :, :, b] = np.sum(mag_cells * (bin_cells == b), axis=-1)
 
-        b_raw = im.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
-        b_eq = im_eq.reshape(8, 8, 8, 8).transpose(0, 2, 1, 3).reshape(64, 64)
+    blocks64 = []
+    for r in range(7):
+        for c in range(7):
+            blk = cell_hists[:, r:r+2, c:c+2, :].reshape(n, 36)
+            norm = np.linalg.norm(blk, axis=1, keepdims=True) + 1e-4
+            blocks64.append(blk / norm)
+    hog64 = np.hstack(blocks64)
 
-        gx = cv2.Sobel(im, cv2.CV_32F, 1, 0, ksize=3)
-        gy = cv2.Sobel(im, cv2.CV_32F, 0, 1, ksize=3)
-        mag = np.hypot(gx, gy)
-        b_mag = mag.reshape(4, 16, 4, 16).transpose(0, 2, 1, 3).reshape(16, 256)
+    cell_hists32 = cell_hists.reshape(n, 4, 2, 4, 2, n_bins).sum(axis=(2, 4))
+    blocks32 = []
+    for r in range(3):
+        for c in range(3):
+            blk = cell_hists32[:, r:r+2, c:c+2, :].reshape(n, 36)
+            norm = np.linalg.norm(blk, axis=1, keepdims=True) + 1e-4
+            blocks32.append(blk / norm)
+    hog32 = np.hstack(blocks32)
 
-        hist_raw, _ = np.histogram(im, bins=24, range=(0.0, 1.0), density=True)
-        hist_eq, _ = np.histogram(im_eq, bins=24, range=(0.0, 1.0), density=True)
+    b_raw = imgs.reshape(n, 8, 8, 8, 8).transpose(0, 1, 3, 2, 4).reshape(n, 64, 64)
+    b_eq = imgs_eq.reshape(n, 8, 8, 8, 8).transpose(0, 1, 3, 2, 4).reshape(n, 64, 64)
+    b_mag = mag.reshape(n, 4, 16, 4, 16).transpose(0, 1, 3, 2, 4).reshape(n, 16, 256)
 
-        left_lung = im[12:52, 8:28]
-        right_lung = im[12:52, 36:56][:, ::-1]
-        asym_abs = np.abs(left_lung - right_lung).mean()
-        asym_std = (left_lung - right_lung).std()
-        lung_center_ratio = (left_lung.mean() + right_lung.mean()) / (2.0 * im[12:52, 28:36].mean() + 1e-5)
+    left_lung = imgs[:, 12:52, 8:28]
+    right_lung = imgs[:, 12:52, 36:56][:, :, ::-1]
+    asym_abs = np.abs(left_lung - right_lung).mean(axis=(1, 2))
+    asym_std = (left_lung - right_lung).std(axis=(1, 2))
+    spine_mean = imgs[:, 12:52, 28:36].mean(axis=(1, 2))
+    lung_center_ratio = (left_lung.mean(axis=(1, 2)) + right_lung.mean(axis=(1, 2))) / (2.0 * spine_mean + 1e-5)
+    dark_ratio = (imgs < 0.05).mean(axis=(1, 2))
+    borders = np.stack([
+        imgs[:, 0, :].mean(axis=1), imgs[:, -1, :].mean(axis=1),
+        imgs[:, :, 0].mean(axis=1), imgs[:, :, -1].mean(axis=1)
+    ], axis=1)
 
-        dark_ratio = (im < 0.05).mean()
-        borders = [im[0, :].mean(), im[-1, :].mean(), im[:, 0].mean(), im[:, -1].mean()]
-        w, h, sz, bpp, ar, area = meta[i, :6]
-        geom = [
-            w, h, sz, bpp, ar, area, np.log1p(sz), np.log1p(area), w - h,
-            dark_ratio, asym_abs, asym_std, lung_center_ratio
-        ] + borders
+    w, h, sz, bpp, ar, area = [meta[:, k] for k in range(6)]
+    geom = np.column_stack([
+        w, h, sz, bpp, ar, area, np.log1p(sz), np.log1p(area), w - h,
+        dark_ratio, asym_abs, asym_std, lung_center_ratio, borders
+    ])
 
-        feats.append(np.concatenate([
-            geom,
-            b_raw.mean(axis=1), b_raw.std(axis=1),
-            b_eq.mean(axis=1), b_eq.std(axis=1),
-            b_mag.mean(axis=1), b_mag.std(axis=1),
-            hist_raw, hist_eq, h32, h64
-        ]))
-    return np.array(feats, dtype=np.float32)
+    hists = np.zeros((n, 48), dtype=np.float32)
+    for i in range(n):
+        h1, _ = np.histogram(imgs[i], bins=24, range=(0.0, 1.0), density=True)
+        h2, _ = np.histogram(imgs_eq[i], bins=24, range=(0.0, 1.0), density=True)
+        hists[i, :24] = h1
+        hists[i, 24:] = h2
+
+    return np.hstack([
+        geom, b_raw.mean(axis=2), b_raw.std(axis=2), b_eq.mean(axis=2), b_eq.std(axis=2),
+        b_mag.mean(axis=2), b_mag.std(axis=2), hists, hog32, hog64
+    ]).astype(np.float32)
 
 
 class ChestXRayCNN(nn.Module):
