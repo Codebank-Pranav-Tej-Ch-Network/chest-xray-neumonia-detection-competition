@@ -19,7 +19,7 @@ from sklearn.svm import SVC
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "cpu"))
-from CS24B057_cpu import extract_multiscale_features, compute_metrics, save_submission_csv
+from CS24B057_cpu import resolve_paths, load_split, extract_multiscale_features, compute_metrics, save_submission_csv
 
 
 def measure_model(name, clf, X_tr, y_tr, X_va, y_va, X_te):
@@ -50,10 +50,23 @@ def main():
     sub_dir = os.path.join(base_dir, "submissions")
     os.makedirs(sub_dir, exist_ok=True)
 
-    d = np.load(cache_path, allow_pickle=True)
-    M_tr, P_tr, y_tr = d["M_tr"], d["P_tr"], d["y_tr"]
-    M_va, P_va, y_va = d["M_va"], d["P_va"], d["y_va"]
-    M_te, P_te, test_names = d["M_te"], d["P_te"], list(d["test_names"])
+    if os.path.exists(cache_path):
+        d = np.load(cache_path, allow_pickle=True)
+        M_tr, P_tr, y_tr = d["M_tr"], d["P_tr"], d["y_tr"]
+        M_va, P_va, y_va = d["M_va"], d["P_va"], d["y_va"]
+        M_te, P_te, test_names = d["M_te"], d["P_te"], list(d["test_names"])
+    else:
+        print("Scanning dataset splits to build features_cache.npz...")
+        train_dir, val_dir, test_dir = resolve_paths(base_dir)
+        M_tr, P_tr, y_tr, _ = load_split(train_dir, is_labeled=True)
+        M_va, P_va, y_va, _ = load_split(val_dir, is_labeled=True)
+        M_te, P_te, _, test_names = load_split(test_dir, is_labeled=False)
+        np.savez(
+            cache_path,
+            M_tr=M_tr, P_tr=P_tr, y_tr=y_tr,
+            M_va=M_va, P_va=P_va, y_va=y_va,
+            M_te=M_te, P_te=P_te, test_names=np.array(test_names)
+        )
 
     print("=" * 125)
     print("PRML 2026 PA4 - Step-by-Step Ablation Progression (Train=4684, Val=585, Test=587)")
