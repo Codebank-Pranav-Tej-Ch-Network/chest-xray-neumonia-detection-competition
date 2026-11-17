@@ -127,7 +127,7 @@ def write_markdown_report(md_path):
 ---
 
 ## 1. Executive Summary and Problem Formulation
-This report documents the complete engineering progression developed for the EE506L Pattern Recognition and Machine Learning (PRML) Course Capstone Competition (`prml-2026-course-assignment-4`). Building directly upon the vectorized Logistic Regression baseline from Programming Assignment 1 (PA1) and the Principal Component Analysis (PCA) dimensionality reduction pipeline from Programming Assignment 2 (PA2), we systematically designed, ablated, and validated a progression of six model families across 5,856 pediatric chest X-ray radiographs (`4,684` training, `585` validation, and `587` unlabeled test images).
+This report documents the complete engineering progression developed for the EE506L Pattern Recognition and Machine Learning (PRML) Course Capstone Competition (`prml-2026-course-assignment-4`). Building directly upon the vectorized Logistic Regression baseline from Programming Assignment 1 (PA1) and the Principal Component Analysis (PCA) dimensionality reduction pipeline from Programming Assignment 2 (PA2), we systematically designed, ablated, and validated a progression of six model families across 5,856 pediatric chest X-ray radiographs (`4,684` training, `585` validation, and `587` unlabeled test images). Our final system finished **#1 Overall** on both the Public Leaderboard (`0.99640`, `277/278` correct) and the Final Private Leaderboard (`0.99029`, `306/309` correct, beating the runner-up at `0.98058` by nearly a full percentage point).
 
 Our primary engineering objective was twofold:
 1. **Strong Out-of-Sample Generalization on Unseen Data:** Ensure that the classifier relies fundamentally on pulmonary radiographic pathology (alveolar consolidation, perihilar infiltrates, bilateral lung asymmetry, and rib-cage gradient orientation) rather than memorizing training instances or relying brittlely on single artifacts.
@@ -253,9 +253,9 @@ def build_pdf_report(pdf_path, fig1_path, fig2_path):
             "This report documents the end-to-end engineering methodology developed for the EE506L Pattern Recognition and Machine\n"
             "Learning (PRML) Course Assignment 4 Kaggle Capstone. Extending the from-scratch Logistic Regression baseline from Assignment 1\n"
             "and the Principal Component Analysis (PCA) pipeline from Assignment 2, I systematically evaluated six model families across\n"
-            "all 5,856 pediatric chest X-ray images (4,684 training, 585 validation, and 587 unlabeled test radiographs). The central goal\n"
-            "was not merely to top the public leaderboard (where our final system ranks #1 with 0.99280 accuracy, or 276/278 correct), but\n"
-            "to guarantee strong out-of-sample generalization on the unseen 53% private test split and external clinical datasets."
+            "all 5,856 pediatric chest X-ray images (4,684 training, 585 validation, and 587 unlabeled test radiographs). Our final system\n"
+            "finished #1 Overall on both the 47% Public Leaderboard (0.99640, 277/278 correct) and the 53% Final Private Leaderboard\n"
+            "(0.99029, 306/309 correct, 583/587 overall), demonstrating strong generalization across both seen and unseen test splits."
         )
         ax.text(0.065, y, p1, fontsize=8.6, va="top", color="#222222", linespacing=1.34)
 
