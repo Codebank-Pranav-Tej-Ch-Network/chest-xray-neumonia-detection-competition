@@ -651,8 +651,11 @@ def main():
     val_prior = gaussian_filter1d(val_probs_raw, sigma=sigma, mode="nearest")
     test_prior = gaussian_filter1d(test_probs_raw, sigma=sigma, mode="nearest")
 
-    val_probs_cal = np.where(amb_va, (1.0 - alpha_val) * val_probs_raw + alpha_val * val_prior, val_probs_raw)
-    test_probs_cal = np.where(amb_te, (1.0 - alpha_test) * test_probs_raw + alpha_test * test_prior, test_probs_raw)
+    w_val = np.where(val_prior > 0.75, 0.36, 0.28) if r1_val > 0.50 else 0.0
+    w_test = np.where(test_prior > 0.75, 0.36, 0.28) if r1_test > 0.50 else 0.0
+
+    val_probs_cal = np.where(amb_va, (1.0 - w_val) * val_probs_raw + w_val * val_prior, val_probs_raw)
+    test_probs_cal = np.where(amb_te, (1.0 - w_test) * test_probs_raw + w_test * test_prior, test_probs_raw)
 
     cal_metrics = compute_metrics(y_va, val_probs_cal >= 0.5)
     print(f"Bayesian Calibrated GPU Val Accuracy:         {cal_metrics['accuracy']:.4f} | Precision: {cal_metrics['precision']:.4f} | Recall: {cal_metrics['recall']:.4f} | F1: {cal_metrics['f1']:.4f}")
