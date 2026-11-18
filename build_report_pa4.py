@@ -223,6 +223,54 @@ A core focus of our engineering process was identifying failure modes and elimin
 6. **Dalal, N., & Triggs, B. (2005).** *Histograms of Oriented Gradients for Human Detection.* IEEE CVPR, 1, 886-893. (Multi-scale block-normalized gradient descriptors).
 7. **Cortes, C., & Vapnik, V. (1995).** *Support-Vector Networks.* Machine Learning, 20(3), 273-297. (Soft-margin SVM formulation).
 8. **Bishop, C. M. (2006).** *Pattern Recognition and Machine Learning.* Springer. (PCA eigendecomposition, regularised logistic regression, and Bayesian prior integration).
+
+---
+
+## 7. Appendix: Step-by-Step Reproducibility Guide (Any OS, GPU or CPU)
+
+To ensure effortless verification on any evaluator system (Linux, macOS, Windows, or Google Colab, with or without a discrete GPU), the submission archive provides a unified entry point (`CS24B057.py` and `CS24B057.ipynb`) alongside automated setup scripts.
+
+### 7.1. One-Command Automated Setup and Execution
+- **On Linux / macOS:**
+  ```bash
+  bash setup_and_run.sh --data-dir /path/to/dataset
+  ```
+- **On Windows (PowerShell):**
+  ```powershell
+  .\setup_and_run.ps1 --data-dir C:\path\to\dataset
+  ```
+The setup script automatically detects `uv`, `conda`, or standard `python3 -m venv`, creates an isolated virtual environment (`.venv_cs24b057`), installs pinned dependencies from `requirements.txt`, and executes `CS24B057.py`.
+
+### 7.2. Manual Environment Creation (Alternative)
+```bash
+# Option A: Using python venv + pip
+python3 -m venv .venv_cs24b057
+source .venv_cs24b057/bin/activate      # On Windows: .venv_cs24b057\Scripts\activate
+pip install -r requirements.txt
+
+# Option B: Using Conda
+conda env create -f environment.yml
+conda activate cs24b057-prml-pa4
+```
+
+### 7.3. Running the Pipelines and Ablation Suite
+```bash
+# 1. Unified Best Run (Auto-selects 320x320 GPU Ensemble on CUDA, or 5-Fold CPU Ensemble on CPU)
+python CS24B057.py --data-dir .
+
+# 2. Explicitly run the 320x320 GPU Pipeline (NVIDIA GPU / Colab L4 or A100)
+python gpu/CS24B057_gpu.py --data-dir . --arch ensemble --img-size 320 --epochs 15 --batch-size 32
+
+# 3. Explicitly run the Fast Local CPU Pipeline (~60-180s on any laptop CPU)
+python cpu/CS24B057_cpu.py
+
+# 4. Run the Classical PRML Ablation Suite (Logistic Regression, PCA+LR, PCA+SVM, HOG+PCA+SVM)
+python run_ablations.py
+```
+
+### 7.4. Determinism and Rule 4 Verification Guarantees
+- **Fixed PRNG Seeds (`set_seed(42)`):** Seeds `random`, `numpy.random`, `torch.manual_seed`, `torch.cuda.manual_seed_all`, with `torch.backends.cudnn.deterministic = True` and `cudnn.benchmark = False`. All `PCA`, `SVC`, `LogisticRegression`, `MLPClassifier`, `HistGradientBoostingClassifier`, and `StratifiedKFold(n_splits=5, shuffle=True, random_state=42)` objects use fixed seeds.
+- **Flexible Dataset Discovery (`resolve_paths`):** Automatically locates `train`, `val`, and `test_unlabeled` whether extracted under `./student_pack/student_pack/`, `./student_pack/`, `./dataset/`, `../dataset/`, or passed via `--data-dir`.
 """
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -385,6 +433,91 @@ def build_pdf_report(pdf_path, fig1_path, fig2_path):
             "[7] Cortes, C., & Vapnik, V. (1995). Support-Vector Networks. Machine Learning, 20(3), 273-297.  [8] Bishop, C. M. (2006). PRML. Springer."
         )
         ax.text(0.065, y_ref - 0.018, refs, fontsize=7.7, va="top", color="#333333", linespacing=1.32)
+
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        # ---------------- PAGE 3: REPRODUCIBILITY APPENDIX ----------------
+        fig = plt.figure(figsize=(8.5, 11.0), dpi=200)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+
+        y = 0.955
+        ax.text(0.065, y, "7. Appendix: Step-by-Step Reproducibility Guide (Any OS, GPU or CPU)", fontsize=12.0, fontweight="bold", color="#1a3a5c", va="top")
+        y -= 0.024
+        p_rep1 = (
+            "To guarantee seamless reproducibility on any evaluation machine (Linux, macOS, Windows, or Google Colab, with or\n"
+            "without a discrete GPU), this submission package includes a unified entry point (CS24B057.py and CS24B057.ipynb),\n"
+            "automated setup scripts (setup_and_run.sh and setup_and_run.ps1), pinned dependency specifications (requirements.txt\n"
+            "and environment.yml), and standalone CPU and GPU pipelines. No OpenCV binary dependency is required anywhere; all\n"
+            "image descriptors (local contrast, multi-scale HOG, Sobel gradients, and lung symmetry) use pure NumPy/SciPy."
+        )
+        ax.text(0.065, y, p_rep1, fontsize=8.6, va="top", color="#222222", linespacing=1.35)
+
+        y -= 0.115
+        ax.text(0.065, y, "7.1. Package Directory Structure", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
+        y -= 0.022
+        tree_txt = (
+            "CS24B057_PA4_Submission/\n"
+            "|-- CS24B057.py             # Unified entry point (auto-detects CUDA GPU vs. CPU fallback)\n"
+            "|-- CS24B057.ipynb          # Unified interactive Jupyter notebook\n"
+            "|-- CS24B057_Report.pdf     # Complete 3-page technical report with reproducibility guide\n"
+            "|-- setup_and_run.sh        # One-command automated setup + execution (Linux / macOS)\n"
+            "|-- setup_and_run.ps1       # One-command automated setup + execution (Windows PowerShell)\n"
+            "|-- requirements.txt        # Universal pip requirements (Python 3.9 to 3.13)\n"
+            "|-- environment.yml         # Conda environment specification (Python 3.11 + PyTorch)\n"
+            "|-- gpu/CS24B057_gpu.py     # Winning 320x320 AMP GPU pipeline (0.99640 Public / 0.99029 Private)\n"
+            "|-- cpu/CS24B057_cpu.py     # Standalone 5-Fold CV CPU pipeline (98.46% Val Acc, ~60-180s)\n"
+            "|-- run_ablations.py        # Reproduces Stages 1 to 4 (LR, PCA+LR, PCA+SVM, HOG+PCA+SVM)\n"
+            "|-- baselines/              # From-scratch PA1 (LogReg) and PA2 (PCA k=237) implementations\n"
+            "|-- submissions/            # Archive of all 13 submission CSVs + winning submission.csv"
+        )
+        ax.text(0.075, y, tree_txt, fontsize=7.6, family="monospace", va="top", color="#111111", linespacing=1.32,
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="#f6f8fa", edgecolor="#cccccc"))
+
+        y -= 0.275
+        ax.text(0.065, y, "7.2. Option A: One-Command Automated Setup & Execution (Recommended)", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
+        y -= 0.022
+        cmd_auto = (
+            "# On Linux or macOS (creates .venv_cs24b057, installs packages, and runs CS24B057.py):\n"
+            "bash setup_and_run.sh --data-dir /path/to/dataset\n\n"
+            "# On Windows PowerShell:\n"
+            ".\\setup_and_run.ps1 --data-dir C:\\path\\to\\dataset"
+        )
+        ax.text(0.075, y, cmd_auto, fontsize=7.6, family="monospace", va="top", color="#111111", linespacing=1.35,
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="#f6f8fa", edgecolor="#cccccc"))
+
+        y -= 0.135
+        ax.text(0.065, y, "7.3. Option B: Step-by-Step Manual Environment Setup & Execution", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
+        y -= 0.022
+        cmd_man = (
+            "# Step 1: Create and activate a clean Python virtual environment (venv, uv, or conda)\n"
+            "python3 -m venv .venv_cs24b057 && source .venv_cs24b057/bin/activate\n"
+            "pip install -r requirements.txt\n\n"
+            "# Step 2: Run the unified best pipeline (auto-detects dataset directory)\n"
+            "python CS24B057.py --data-dir .\n\n"
+            "# Step 3: Or run the GPU pipeline, CPU pipeline, or Classical Ablation Benchmark:\n"
+            "python gpu/CS24B057_gpu.py --data-dir . --arch ensemble --img-size 320 --epochs 15\n"
+            "python cpu/CS24B057_cpu.py\n"
+            "python run_ablations.py"
+        )
+        ax.text(0.075, y, cmd_man, fontsize=7.6, family="monospace", va="top", color="#111111", linespacing=1.35,
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="#f6f8fa", edgecolor="#cccccc"))
+
+        y -= 0.235
+        ax.text(0.065, y, "7.4. Determinism, Hardware Compatibility, and Rule 4 Verification", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
+        y -= 0.022
+        p_rep4 = (
+            "1. Strict Determinism: Every script initializes random.seed(42), np.random.seed(42), torch.manual_seed(42), and\n"
+            "   torch.cuda.manual_seed_all(42) with cudnn.deterministic = True and cudnn.benchmark = False. All scikit-learn estimators\n"
+            "   (PCA, SVC, LogisticRegression, MLPClassifier, HistGradientBoostingClassifier) and StratifiedKFold(n_splits=5) use fixed seeds.\n"
+            "2. Pre-computed GPU Probability Cache Included: The archive includes the lightweight out-of-sample probability caches\n"
+            "   (gpu_cache_*_320.npz) from our NVIDIA RTX A4000 run so evaluators can verify the exact 0.99640 Public / 0.99029 Private LB\n"
+            "   submission in ~18 seconds even on a CPU-only machine, or pass --retrain to retrain all three 320x320 CNNs from scratch."
+        )
+        ax.text(0.065, y, p_rep4, fontsize=8.6, va="top", color="#222222", linespacing=1.35)
 
         pdf.savefig(fig)
         plt.close(fig)

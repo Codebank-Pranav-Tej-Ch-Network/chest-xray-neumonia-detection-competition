@@ -37,32 +37,46 @@ def set_seed(seed=42):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def resolve_root_dir(user_dir=None):
     if user_dir and os.path.exists(user_dir):
         return os.path.abspath(user_dir)
     here = os.path.dirname(os.path.abspath(__file__))
-    for candidate in [here, os.path.dirname(here), "/content", "/content/dataset", "."]:
-        if os.path.exists(os.path.join(candidate, "student_pack")):
-            return os.path.abspath(candidate)
+    for candidate in [here, os.path.dirname(here), os.path.dirname(os.path.dirname(here)), "/content", "/content/dataset", "."]:
+        for sub in ["student_pack", "dataset", "train"]:
+            if os.path.exists(os.path.join(candidate, sub)):
+                return os.path.abspath(candidate)
     return os.path.abspath(".")
 
 
 def resolve_paths(base_dir):
-    train_dir = os.path.join(base_dir, "student_pack", "student_pack", "train")
-    if not os.path.exists(train_dir):
-        train_dir = os.path.join(base_dir, "student_pack", "train")
-
-    val_dir = os.path.join(base_dir, "student_pack", "student_pack", "val")
-    if not os.path.exists(val_dir):
-        val_dir = os.path.join(base_dir, "student_pack", "val")
-
-    test_dir = os.path.join(base_dir, "test_unlabeled", "test_unlabeled")
-    if not os.path.exists(test_dir):
-        test_dir = os.path.join(base_dir, "test_unlabeled")
-
+    train_candidates = [
+        os.path.join(base_dir, "student_pack", "student_pack", "train"),
+        os.path.join(base_dir, "student_pack", "train"),
+        os.path.join(base_dir, "dataset", "train"),
+        os.path.join(base_dir, "train"),
+        os.path.join(os.path.dirname(base_dir), "dataset", "train"),
+    ]
+    val_candidates = [
+        os.path.join(base_dir, "student_pack", "student_pack", "val"),
+        os.path.join(base_dir, "student_pack", "val"),
+        os.path.join(base_dir, "dataset", "val"),
+        os.path.join(base_dir, "val"),
+        os.path.join(os.path.dirname(base_dir), "dataset", "val"),
+    ]
+    test_candidates = [
+        os.path.join(base_dir, "test_unlabeled", "test_unlabeled"),
+        os.path.join(base_dir, "test_unlabeled"),
+        os.path.join(base_dir, "dataset", "test_unlabeled"),
+        os.path.join(base_dir, "dataset", "test"),
+        os.path.join(os.path.dirname(base_dir), "dataset", "test_unlabeled"),
+    ]
+    train_dir = next((p for p in train_candidates if os.path.exists(p)), train_candidates[0])
+    val_dir = next((p for p in val_candidates if os.path.exists(p)), val_candidates[0])
+    test_dir = next((p for p in test_candidates if os.path.exists(p)), test_candidates[0])
     return train_dir, val_dir, test_dir
 
 
@@ -491,13 +505,13 @@ def main():
     parser = argparse.ArgumentParser(description="PRML 2026 PA4 GPU Pipeline")
     parser.add_argument("--data-dir", type=str, default=None, help="Root folder containing student_pack and test_unlabeled")
     parser.add_argument("--arch", type=str, default="ensemble", choices=["ensemble", "densenet121", "resnet50", "custom_resatt"])
-    parser.add_argument("--img-size", type=int, default=224)
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--img-size", type=int, default=320)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--retrain", action="store_true", help="Force retraining GPU models even if cached")
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     t_start = time.time()
     set_seed(42)

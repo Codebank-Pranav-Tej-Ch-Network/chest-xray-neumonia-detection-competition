@@ -101,3 +101,51 @@ A core focus of our engineering process was identifying failure modes and elimin
 6. **Dalal, N., & Triggs, B. (2005).** *Histograms of Oriented Gradients for Human Detection.* IEEE CVPR, 1, 886-893. (Multi-scale block-normalized gradient descriptors).
 7. **Cortes, C., & Vapnik, V. (1995).** *Support-Vector Networks.* Machine Learning, 20(3), 273-297. (Soft-margin SVM formulation).
 8. **Bishop, C. M. (2006).** *Pattern Recognition and Machine Learning.* Springer. (PCA eigendecomposition, regularised logistic regression, and Bayesian prior integration).
+
+---
+
+## 7. Appendix: Step-by-Step Reproducibility Guide (Any OS, GPU or CPU)
+
+To ensure effortless verification on any evaluator system (Linux, macOS, Windows, or Google Colab, with or without a discrete GPU), the submission archive provides a unified entry point (`CS24B057.py` and `CS24B057.ipynb`) alongside automated setup scripts.
+
+### 7.1. One-Command Automated Setup and Execution
+- **On Linux / macOS:**
+  ```bash
+  bash setup_and_run.sh --data-dir /path/to/dataset
+  ```
+- **On Windows (PowerShell):**
+  ```powershell
+  .\setup_and_run.ps1 --data-dir C:\path\to\dataset
+  ```
+The setup script automatically detects `uv`, `conda`, or standard `python3 -m venv`, creates an isolated virtual environment (`.venv_cs24b057`), installs pinned dependencies from `requirements.txt`, and executes `CS24B057.py`.
+
+### 7.2. Manual Environment Creation (Alternative)
+```bash
+# Option A: Using python venv + pip
+python3 -m venv .venv_cs24b057
+source .venv_cs24b057/bin/activate      # On Windows: .venv_cs24b057\Scripts\activate
+pip install -r requirements.txt
+
+# Option B: Using Conda
+conda env create -f environment.yml
+conda activate cs24b057-prml-pa4
+```
+
+### 7.3. Running the Pipelines and Ablation Suite
+```bash
+# 1. Unified Best Run (Auto-selects 320x320 GPU Ensemble on CUDA, or 5-Fold CPU Ensemble on CPU)
+python CS24B057.py --data-dir .
+
+# 2. Explicitly run the 320x320 GPU Pipeline (NVIDIA GPU / Colab L4 or A100)
+python gpu/CS24B057_gpu.py --data-dir . --arch ensemble --img-size 320 --epochs 15 --batch-size 32
+
+# 3. Explicitly run the Fast Local CPU Pipeline (~60-180s on any laptop CPU)
+python cpu/CS24B057_cpu.py
+
+# 4. Run the Classical PRML Ablation Suite (Logistic Regression, PCA+LR, PCA+SVM, HOG+PCA+SVM)
+python run_ablations.py
+```
+
+### 7.4. Determinism and Rule 4 Verification Guarantees
+- **Fixed PRNG Seeds (`set_seed(42)`):** Seeds `random`, `numpy.random`, `torch.manual_seed`, `torch.cuda.manual_seed_all`, with `torch.backends.cudnn.deterministic = True` and `cudnn.benchmark = False`. All `PCA`, `SVC`, `LogisticRegression`, `MLPClassifier`, `HistGradientBoostingClassifier`, and `StratifiedKFold(n_splits=5, shuffle=True, random_state=42)` objects use fixed seeds.
+- **Flexible Dataset Discovery (`resolve_paths`):** Automatically locates `train`, `val`, and `test_unlabeled` whether extracted under `./student_pack/student_pack/`, `./student_pack/`, `./dataset/`, `../dataset/`, or passed via `--data-dir`.
