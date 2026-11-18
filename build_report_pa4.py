@@ -438,9 +438,12 @@ def main():
     pdf_copy = os.path.join(base_dir, "CS24B057_Report.pdf")
 
     fig1_path, fig2_path = generate_figures(fig_dir)
-    build_report(pdf_path, fig1_path, fig2_path)
-    shutil.copyfile(pdf_path, pdf_copy)
-    print(f"Built ReportLab PDF: {pdf_path} and {pdf_copy}")
+    build_report(pdf_copy, fig1_path, fig2_path)
+    try:
+        shutil.copyfile(pdf_copy, pdf_path)
+        print(f"Built ReportLab PDF: {pdf_path} and {pdf_copy}")
+    except PermissionError:
+        print(f"Built ReportLab PDF: {pdf_copy} (close CS24B057.pdf viewer to overwrite CS24B057.pdf)")
 
 
 if __name__ == "__main__":
