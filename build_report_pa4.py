@@ -1,14 +1,9 @@
-"""
-CS24B057
-Generates the complete EE506L Programming Assignment 4 Capstone Report:
-  - figures/ablation_progression.png
-  - figures/generalization_diagnostics.png
-  - REPORT.md (clean Markdown version for GitHub / reference)
-  - CS24B057_Report.pdf (typeset multi-page PDF report)
-"""
-
+# -*- coding: utf-8 -*-
 import os
+import sys
+import shutil
 import tempfile
+
 os.environ["MPLCONFIGDIR"] = os.path.join(tempfile.gettempdir(), "mpl_cs24b057")
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
@@ -16,21 +11,34 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
+from PIL import Image as PILImage  # preload native Pillow before appending PA1 site-packages
+
+pa1_site = r"C:\Users\sunny\PRML\Assgn-1\venv\lib\python3.12\site-packages"
+if os.path.exists(pa1_site) and pa1_site not in sys.path:
+    sys.path.append(pa1_site)
+
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, HRFlowable, KeepTogether
+)
 
 
 def generate_figures(fig_dir):
     os.makedirs(fig_dir, exist_ok=True)
 
-    # 1. Ablation Progression Figure
+    # Figure 1: Validation Progression across Models
     stages = [
-        "PA1: Vanilla GD\nLogReg (4096-D)",
-        "Baseline 1:\nL2 LogReg (4096-D)",
-        "PA2 / Baseline 2:\nPCA(237) + LogReg",
-        "Baseline 3:\nPCA(237) + RBF SVM",
-        "Baseline 4:\nHOG+Contrast+SVM",
-        "Iter 2 CPU:\n5-Fold Stacker",
-        "Final GPU Ensemble:\nDenseNet+ResNet+Stack"
+        "PA1: GD\nLogReg",
+        "L2 LogReg\n(4096-D)",
+        "PA2: PCA(237)\n+ LogReg",
+        "PCA(237) +\nRBF SVM",
+        "HOG+Contrast\n+ RBF SVM",
+        "GPU Per-Image\n(alpha=0.0)",
+        "Final GPU\nCalibrated"
     ]
     val_acc = [92.99, 94.36, 94.36, 94.53, 98.29, 99.15, 99.49]
     val_f1 = [95.29, 96.17, 96.17, 96.31, 98.83, 99.42, 99.65]
@@ -38,79 +46,86 @@ def generate_figures(fig_dir):
     x = np.arange(len(stages))
     width = 0.36
 
-    fig, ax = plt.subplots(figsize=(10.5, 4.6), dpi=200)
-    rects1 = ax.bar(x - width / 2, val_acc, width, label="Validation Accuracy (%)", color="#1f4e78", edgecolor="#0f2c47")
-    rects2 = ax.bar(x + width / 2, val_f1, width, label="Validation F1-Score (%)", color="#2e8b57", edgecolor="#195232")
+    fig, ax = plt.subplots(figsize=(9.2, 3.8), dpi=200)
+    r1 = ax.bar(x - width / 2, val_acc, width, label="Validation Accuracy (%)", color="#1a3a5c")
+    r2 = ax.bar(x + width / 2, val_f1, width, label="Validation F1-Score (%)", color="#2e8b57")
 
-    ax.set_ylabel("Score (%)", fontsize=10.5, fontweight="bold")
-    ax.set_title("Systematic Engineering Progression Across Course Paradigms (Validation Split, N = 585)", fontsize=11.5, fontweight="bold", pad=12)
+    ax.set_ylabel("Score (%)", fontsize=9.5, fontweight="bold")
+    ax.set_title("Validation Performance Progression Across Models (N = 585)", fontsize=10.5, fontweight="bold", pad=10)
     ax.set_xticks(x)
-    ax.set_xticklabels(stages, fontsize=8.5)
-    ax.set_ylim(90.0, 100.5)
+    ax.set_xticklabels(stages, fontsize=8.2)
+    ax.set_ylim(90.0, 100.8)
     ax.grid(axis="y", linestyle="--", alpha=0.45)
-    ax.legend(loc="lower right", frameon=True, fontsize=9.5)
+    ax.legend(loc="lower right", frameon=True, fontsize=8.8)
 
-    for r in rects1:
+    for r in r1:
         h = r.get_height()
-        ax.annotate(f"{h:.2f}", xy=(r.get_x() + r.get_width() / 2, h), xytext=(0, 3),
-                    textcoords="offset points", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color="#1f4e78")
-    for r in rects2:
+        ax.annotate(f"{h:.2f}", xy=(r.get_x() + r.get_width() / 2, h), xytext=(0, 2),
+                    textcoords="offset points", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#1a3a5c")
+    for r in r2:
         h = r.get_height()
-        ax.annotate(f"{h:.2f}", xy=(r.get_x() + r.get_width() / 2, h), xytext=(0, 3),
-                    textcoords="offset points", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color="#195232")
+        ax.annotate(f"{h:.2f}", xy=(r.get_x() + r.get_width() / 2, h), xytext=(0, 2),
+                    textcoords="offset points", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#195232")
 
     plt.tight_layout()
     fig1_path = os.path.join(fig_dir, "ablation_progression.png")
     plt.savefig(fig1_path, dpi=200)
     plt.close(fig)
 
-    # 2. Generalization & Overfitting Diagnostics Figure
+    # Figure 2: Training Convergence & Public vs Private Leaderboard Scores
     epochs = np.array([1, 3, 6, 9, 12, 15])
-    tr_loss_unreg = np.array([0.1420, 0.0355, 0.0221, 0.0066, 0.0037, 0.0017])
+    tr_loss = np.array([0.1420, 0.0355, 0.0221, 0.0066, 0.0037, 0.0017])
     va_acc_dense = np.array([90.60, 93.16, 95.56, 98.12, 97.95, 98.12])
     va_acc_resatt = np.array([51.28, 54.87, 82.22, 96.75, 96.41, 96.07])
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.5, 4.2), dpi=200)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9.6, 3.7), dpi=200)
 
-    ax1_twin = ax1.twinx()
-    l1 = ax1.plot(epochs, tr_loss_unreg, "o--", color="#c0392b", linewidth=2.0, label="DenseNet121 Train BCE Loss")
-    l2 = ax1_twin.plot(epochs, va_acc_dense, "s-", color="#1f4e78", linewidth=2.2, label="DenseNet121 Val Acc (%)")
-    l3 = ax1_twin.plot(epochs, va_acc_resatt, "^-", color="#2e8b57", linewidth=2.0, label="CustomResAttNet Val Acc (%)")
-    ax1_twin.axvline(9, color="#7f8c8d", linestyle=":", linewidth=1.5)
-    ax1_twin.annotate("Peak Generalization\n(Epoch 9: 98.12% Val Acc)", xy=(9, 98.12), xytext=(4.3, 91.5),
-                      arrowprops=dict(arrowstyle="->", color="#333333", lw=1.0), fontsize=8.2, fontweight="bold")
+    ax1_t = ax1.twinx()
+    l1 = ax1.plot(epochs, tr_loss, "o--", color="#c0392b", lw=1.8, label="DenseNet121 Train Loss")
+    l2 = ax1_t.plot(epochs, va_acc_dense, "s-", color="#1a3a5c", lw=2.0, label="DenseNet121 Val Acc (%)")
+    l3 = ax1_t.plot(epochs, va_acc_resatt, "^-", color="#2e8b57", lw=1.8, label="CustomResAtt Val Acc (%)")
+    ax1_t.axvline(9, color="#7f8c8d", linestyle=":", lw=1.3)
+    ax1_t.annotate("Best Val Checkpoint\n(Epoch 9)", xy=(9, 98.12), xytext=(4.2, 90.0),
+                   arrowprops=dict(arrowstyle="->", color="#333333", lw=0.9), fontsize=7.8, fontweight="bold")
 
-    ax1.set_xlabel("Training Epoch", fontsize=9.5, fontweight="bold")
-    ax1.set_ylabel("Weighted Binary Cross-Entropy Loss", color="#c0392b", fontsize=9.5, fontweight="bold")
-    ax1_twin.set_ylabel("Validation Accuracy (%)", color="#1f4e78", fontsize=9.5, fontweight="bold")
-    ax1.set_title("(a) GPU Backbone Convergence & Early-Stopping Selection", fontsize=10, fontweight="bold")
+    ax1.set_xlabel("Epoch", fontsize=9.0, fontweight="bold")
+    ax1.set_ylabel("Weighted BCE Loss", color="#c0392b", fontsize=9.0, fontweight="bold")
+    ax1_t.set_ylabel("Validation Accuracy (%)", color="#1a3a5c", fontsize=9.0, fontweight="bold")
+    ax1.set_title("(a) GPU Backbone Training vs. Validation Curve", fontsize=9.5, fontweight="bold")
     ax1.grid(True, linestyle="--", alpha=0.4)
     lines = l1 + l2 + l3
-    labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc="center right", fontsize=8.0, frameon=True)
+    ax1.legend(lines, [l.get_label() for l in lines], loc="center right", fontsize=7.5, frameon=True)
 
-    # Panel B: Public Leaderboard Progression across our Kaggle Submissions
-    subs = [
-        "Pure Visual\n(Pixels Only)\n0.97482",
-        "GPU Per-Image\n(alpha = 0.0)\n0.98201",
-        "GPU Hybrid v1\n(Sym. Prior)\n0.99280",
-        "GPU Hybrid v2\n(Prevalence Prior)\n0.99640"
+    sub_labels = [
+        "Sub 3:\nCPU Per-Img",
+        "Sub 7:\nGPU Pixels",
+        "Sub 6:\nGPU Per-Img",
+        "Sub 4 & 5:\nGPU v1",
+        "Sub 8 (Final):\nGPU v2"
     ]
-    lb_scores = [97.482, 98.201, 99.280, 99.640]
-    errors_278 = [7, 5, 2, 1]
-    colors_lb = ["#5b7c99", "#3b6998", "#2b5c8f", "#1b7837"]
+    pub_s = [97.482, 97.482, 98.201, 99.280, 99.640]
+    prv_s = [97.734, 98.058, 98.381, 98.705, 99.029]
+    x2 = np.arange(len(sub_labels))
+    w2 = 0.35
 
-    bars = ax2.bar(np.arange(4), lb_scores, width=0.52, color=colors_lb, edgecolor="#111111")
-    ax2.set_xticks(np.arange(4))
-    ax2.set_xticklabels(subs, fontsize=8.0)
-    ax2.set_ylim(96.5, 100.0)
-    ax2.set_ylabel("Kaggle Public Leaderboard Score (%)", fontsize=9.5, fontweight="bold")
-    ax2.set_title("(b) Actual Kaggle Public Leaderboard Progression (278 Test Imgs)", fontsize=10, fontweight="bold")
+    b_pub = ax2.bar(x2 - w2 / 2, pub_s, w2, label="Public LB (47%)", color="#2b5c8f")
+    b_prv = ax2.bar(x2 + w2 / 2, prv_s, w2, label="Private LB (53%)", color="#1b7837")
+    ax2.set_xticks(x2)
+    ax2.set_xticklabels(sub_labels, fontsize=7.8)
+    ax2.set_ylim(96.5, 100.3)
+    ax2.set_ylabel("Kaggle Accuracy (%)", fontsize=9.0, fontweight="bold")
+    ax2.set_title("(b) Public vs. Private Leaderboard Progression", fontsize=9.5, fontweight="bold")
     ax2.grid(axis="y", linestyle="--", alpha=0.4)
+    ax2.legend(loc="upper left", fontsize=7.8, frameon=True)
 
-    for b, s, err in zip(bars, lb_scores, errors_278):
-        ax2.annotate(f"{s:.3f}%\n({278-err}/278, {err} err)", xy=(b.get_x() + b.get_width() / 2, s),
-                     xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontsize=7.8, fontweight="bold")
+    for b in b_pub:
+        h = b.get_height()
+        ax2.annotate(f"{h:.2f}", xy=(b.get_x() + b.get_width() / 2, h), xytext=(0, 2),
+                     textcoords="offset points", ha="center", va="bottom", fontsize=6.8, fontweight="bold", color="#1a3a5c")
+    for b in b_prv:
+        h = b.get_height()
+        ax2.annotate(f"{h:.2f}", xy=(b.get_x() + b.get_width() / 2, h), xytext=(0, 2),
+                     textcoords="offset points", ha="center", va="bottom", fontsize=6.8, fontweight="bold", color="#195232")
 
     plt.tight_layout()
     fig2_path = os.path.join(fig_dir, "generalization_diagnostics.png")
@@ -119,422 +134,311 @@ def generate_figures(fig_dir):
     return fig1_path, fig2_path
 
 
-def write_markdown_report(md_path):
-    content = r"""# EE506L Programming Assignment 4 (Course Capstone Report)
-**From Linear Classifiers to Hybrid Deep-Radiographic Ensembles for Pediatric Chest X-Ray Pneumonia Detection**  
-**Author:** Ch Venkata Sai Pranav Tej | **Roll No:** CS24B057 | **Programme:** BTech CSE, 3rd Year, IIT Tirupati
-
----
-
-## 1. Executive Summary and Problem Formulation
-This report documents the complete engineering progression developed for the EE506L Pattern Recognition and Machine Learning (PRML) Course Capstone Competition (`prml-2026-course-assignment-4`). Building directly upon the vectorized Logistic Regression baseline from Programming Assignment 1 (PA1) and the Principal Component Analysis (PCA) dimensionality reduction pipeline from Programming Assignment 2 (PA2), we systematically designed, ablated, and validated a progression of six model families across 5,856 pediatric chest X-ray radiographs (`4,684` training, `585` validation, and `587` unlabeled test images). Our final system finished **#1 Overall** on both the Public Leaderboard (`0.99640`, `277/278` correct) and the Final Private Leaderboard (`0.99029`, `306/309` correct, beating the runner-up at `0.98058` by nearly a full percentage point).
-
-Our primary engineering objective was twofold:
-1. **Strong Out-of-Sample Generalization on Unseen Data:** Ensure that the classifier relies fundamentally on pulmonary radiographic pathology (alveolar consolidation, perihilar infiltrates, bilateral lung asymmetry, and rib-cage gradient orientation) rather than memorizing training instances or relying brittlely on single artifacts.
-2. **Methodological Rigour Across Course Paradigms:** Evaluate how classical linear models (Logistic Regression), unsupervised subspace projection (PCA), kernel methods (Soft-Margin RBF Support Vector Machines), handcrafted radiographic descriptors (multi-scale HOG and local adaptive contrast normalization), and high-resolution deep convolutional backbones (`DenseNet121`, `ResNet50`, and a custom Squeeze-and-Excitation Residual Network) complement one another.
-
----
-
-## 2. Exploratory Data Analysis, Class Imbalance, and Loss Function Design
-
-| Dataset Split | Total Images (N) | Normal (Label 0) | Pneumonia (Label 1) | Pneumonia Ratio | Imbalance Factor |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Training Split (`train`)** | 4,684 | 1,266 | 3,418 | 72.97% | 2.70 : 1 |
-| **Validation Split (`val`)** | 585 | 158 | 427 | 72.99% | 2.70 : 1 |
-| **Pooled Labeled (`train + val`)** | 5,269 | 1,424 | 3,845 | 72.97% | 2.70 : 1 |
-| **Unlabeled Test (`test_unlabeled`)** | 587 | ~153 (est.) | ~434 (est.) | ~73.9% | ~2.83 : 1 |
-
-### Handling the 73% / 27% Class Imbalance
-As observed in PA1, a trivial majority-class predictor (`Label = 1` everywhere) already achieves `72.99%` accuracy while failing completely on `Normal` radiographs (`0%` specificity). Under standard unweighted Binary Cross-Entropy (BCE) or unweighted hinge loss, boundary examples skew toward the majority `Pneumonia` class, producing excessive False Positives on healthy pediatric lungs.
-
-To address this without sacrificing sensitivity:
-- **In Deep Convolutional Models:** We use class-weighted Binary Cross-Entropy with Logits (`BCEWithLogitsLoss`) combined with **Label Smoothing ($\epsilon = 0.05$)**:
-  $$y_{\\text{smooth}} = y (1 - \\epsilon) + \\frac{\\epsilon}{2} = 0.95 y + 0.025, \\quad \\mathcal{L}(z, y) = -\\frac{1}{N} \\sum_{i=1}^{N} \\left[ w_+ y_{\\text{smooth}, i} \\log \\sigma(z_i) + (1 - y_{\\text{smooth}, i}) \\log(1 - \\sigma(z_i)) \\right]$$
-  where $w_+ = N_{\\text{neg}} / N_{\\text{pos}} = 1266 / 3418 \\approx 0.3704$ equalizes the gradient magnitude of positive and negative examples, and $\\epsilon = 0.05$ prevents late-epoch logit saturation ($z_i \\to \\pm\\infty$).
-- **In Soft-Margin SVMs and Linear Models:** Instead of full inverse-ratio weighting ($w_0 = 2.70$), which our ablation shows over-corrects and hurts recall on linear hyperplanes, we found via cross-validation that moderate asymmetric cost weighting ($w_0 = 2.0, w_1 = 1.0$) maximizes both Accuracy and F1-Score.
-
----
-
-## 3. Step-by-Step Experimental Progression and Ablation Results
-
-All models below were evaluated on the exact same held-out validation split (`N = 585`) using zero-denominator-safe Precision, Recall, F1-Score, and Accuracy metrics.
-
-| Stage / Model Configuration | Feature Space (Dim) | Fit Time | Train Acc | Val Acc | Val Prec | Val Rec | Val F1 | Kaggle Public LB |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **0. PA1 Vanilla Full-Batch GD LogReg** | Raw 64x64 Pixels (4,096) | 14.20s | 0.9415 | 0.9299 | 0.9463 | 0.9555 | 0.9529 | -- |
-| **1. Basic L2 Logistic Regression ($C=0.1$)** | Raw 64x64 Pixels (4,096) | 5.60s | 0.9609 | 0.9436 | 0.9539 | 0.9696 | 0.9617 | Sub Ready |
-| **2. Basic PCA ($k=237$) + LogReg ($C=0.1$)** | Eigen-Radiographs (237) | **0.20s** | 0.9543 | 0.9436 | 0.9539 | 0.9696 | 0.9617 | Sub Ready |
-| **2b. PCA ($k=237$) + Aggressive Class-Weight LR** | Eigen-Radiographs (237) | 0.27s | 0.9543 | 0.9231 | 0.9591 | 0.9344 | 0.9466 | *(Discarded)* |
-| **3. Basic PCA ($k=237$) + Soft-Margin RBF SVM** | Standardized PCA (237) | 10.07s | 1.0000 | 0.9453 | 0.9478 | 0.9789 | 0.9631 | Sub Ready |
-| **4. Multi-Scale HOG + Local Contrast + PCA + SVM** | Radiographic + PCA (197) | 1.77s | 0.9996 | **0.9829** | 0.9860 | 0.9906 | **0.9883** | Sub Ready |
-| **5a. Iter 2 CPU 5-Fold Stacker (Per-Image Only)** | HOG+Contrast+64x64 CNN | 48.0s | 0.9814 (OOF) | 0.9761 | 0.9813 | 0.9859 | 0.9836 | **0.97482** (Sub #3) |
-| **5b. Iter 2 CPU 5-Fold Stacker (Calibrated)** | + Scanner/Block Prior | 48.0s | 0.9814 (OOF) | 0.9846 | 0.9838 | 0.9953 | 0.9895 | **0.98201** (Sub #1, #2) |
-| **6a. GPU Pure-Pixel Visual Ensemble (320x320)** | DenseNet121+ResNet50+HOG | ~180s | 0.9910 | **0.9863** | 0.9883 | 0.9930 | **0.9906** | **0.97482** |
-| **6b. Per-Image GPU + 5-Fold Hybrid (No Leak)** | 320x320 CNNs + 5-Fold Stack | ~195s | 0.9905 (OOF) | **0.9915** | 0.9907 | 0.9977 | **0.9942** | **0.98201** |
-| **6c. Final Calibrated GPU Hybrid (320x320)** | + Prevalence Prior ($r_1=0.92$) | ~198s | 0.9905 (OOF) | **0.9949** | **0.9930** | **1.0000** | **0.9965** | **0.99640** (#1 Rank) |
-
-### Why Each Engineering Transition Improved Performance
-1. **From PA1 Vanilla GD (`92.99%`) to L2-Regularized L-BFGS Logistic Regression (`94.36%`):** Full-batch gradient descent with fixed $\\eta = 0.01$ oscillates along high-variance eigendirections of the 4096-D pixel space while converging slowly along low-variance directions. Adding $\\ell_2$ regularization ($\\frac{1}{2C}\\|w\\|_2^2$) with Quasi-Newton L-BFGS optimization suppresses pixel-level colinearity and raises validation accuracy by `+1.37%`.
-2. **From Raw Pixels (`4,096`-D) to PCA Subspace ($k=237$, `96.16%` centered variance):** Projecting onto the top 237 eigenvectors cuts classifier fit time by **28x** (`5.60s -> 0.20s`) while achieving the exact same validation accuracy (`94.36%`) and F1 (`0.9617`). This confirms that the bottom ~4% of pixel variance consists almost entirely of sensor shot noise and border artifacts.
-3. **From Linear Hyperplane to Soft-Margin RBF SVM (`94.36% -> 94.53%` Acc, `97.89%` Recall):** In PCA space, healthy lungs vary smoothly across patient age and chest width, creating a curved manifold. A Soft-Margin SVM with Radial Basis Function kernel $K(z_i, z_j) = \\exp(-\\gamma \\|z_i - z_j\\|^2)$ and slack penalty $C=2.5$ captures non-linear combinations of principal components, boosting recall to `97.89%`.
-4. **The Single Biggest Feature Breakthrough: Multi-Scale HOG + Local Contrast + Bilateral Lung Symmetry (`94.53% -> 98.29%` Val Acc):** Raw intensity PCA is sensitive to global X-ray exposure and loses fine local edge structure. We engineered a pure NumPy/SciPy radiographic descriptor (`2,441` dimensions compressed via PCA to `197` features):
-   - **Local Adaptive Contrast Normalization (`16x16` sliding window):** Normalizes each pixel by its local mean and standard deviation $\\tilde{I}(x,y) = \\text{clip}((I - \\mu_{16}) / (\\sigma_{16} + 0.08), -3, 3)$, exposing subtle retrocardiac and basal opacities hidden in dark or over-exposed regions.
-   - **Multi-Scale HOG (`8x8` fine cells and `16x16` coarse cells, 9 orientation bins, `2x2` L2-normalized blocks):** Captures the crisp horizontal gradient structure of healthy rib cages versus the diffuse, isotropic scattering caused by alveolar fluid consolidation.
-   - **Bilateral Left-vs-Right Lung Symmetry:** Because bacterial lobar pneumonia typically consolidates unilaterally in one lung lobe while healthy lungs are bilaterally symmetric across the spine, the mean and standard deviation of $|I_{\\text{left}} - \\text{flip}(I_{\\text{right}})|$ provide a highly discriminative, scanner-invariant biomarker.
-5. **High-Resolution GPU Deep Ensemble (`98.63%` Standalone Visual Val Acc, `0.99280` Public LB):** Downsampling a `1200x900` chest radiograph to `64x64` discards fine interstitial markings (Kerley B lines and air bronchograms). Training `DenseNet121` (which reuses multi-scale feature maps across dense blocks), `ResNet50`, and a custom 4-stage Squeeze-and-Excitation network (`CustomResAttNet`) at `224x224` resolution with 3-view Test-Time Augmentation (TTA) achieved `98.63%` standalone validation accuracy (`577 / 585` correct) purely from pixels.
-
----
-
-## 4. What Did Not Work & How We Prevented Overfitting
-
-A core focus of our engineering process was identifying failure modes and eliminating overfitting risks so the model generalizes reliably to the unseen 53% Private Leaderboard and external datasets:
-
-1. **Failure Mode 1: Late-Epoch Logit Saturation (`Train Loss: 0.0017` at Epoch 15):**
-   - *Observation:* During our first GPU run, `DenseNet121` reached its peak validation accuracy (`0.9812`) at **Epoch 9** (`Train Loss = 0.0066`), dipped at Epoch 12 (`0.9795`), and hit `0.9812` again at **Epoch 15** (`Train Loss = 0.0017`). Using a naive `va_acc >= best_val_acc` rule caused the overfitted Epoch 15 weights to overwrite the well-calibrated Epoch 9 checkpoint.
-   - *Engineering Fix:* We introduced (a) **Label Smoothing ($\epsilon = 0.05$)**, (b) **RandomErasing ($p = 0.15$)**, (c) **Differential Learning Rates** (`0.25x` learning rate on the pretrained convolutional trunk, `1.0x` on the projection head), and (d) **Strict Tie-Breaking by Validation Loss** `(round(va_acc, 5), -va_loss)`, guaranteeing that the best-calibrated early checkpoint is restored.
-2. **Failure Mode 2: In-Sample CNN Embedding Leakage into the 5-Fold Stacker:**
-   - *Observation:* When we initially concatenated the 128-D CNN training embeddings (`cnn_emb_tr`) with the handcrafted HOG features inside the 5-Fold `SVM / MLP / HistGradientBoosting` stacker, the tabular models saw near-zero training error on `cnn_emb_tr` (since the CNN had already trained on `y_tr`) and placed excessive weight on the CNN features while ignoring the geometric and HOG features.
-   - *Engineering Fix:* We decoupled the two branches completely. The 5-Fold `SVC + MLP + HistGradientBoosting + LogisticRegression` stacker is trained **strictly out-of-fold on the handcrafted radiographic features** (`98.14%` OOF accuracy across all 5,269 images), and its out-of-fold probability is blended at the meta-level (`0.45` weight) with the out-of-sample GPU backbone probability (`0.55` weight).
-3. **Failure Mode 3: Over-Aggressive Sequence Smoothing (`alpha = 0.62` in Iteration 1) vs. Unseen Shuffled Datasets:**
-   - *Observation:* Exploratory metadata analysis revealed that `31.3%` of images carry deterministic acquisition signatures (`icc_profile` present in `1,220 / 1,220` Normal images; `RGB/Progressive` mode in `398 / 398` Pneumonia images) and that test files exhibit block autocorrelation ($r_1 \\approx 0.90$). However, in Iteration 1 (`Sub #1`), setting the Gaussian sequence filter weight to `alpha = 0.62` collapsed the predictions into a rigid step function (`[0]*159 + [1]*428`), scoring `0.98201` (`273 / 278` = 5 errors on the Public Leaderboard) because it overrode genuine cross-class radiographs.
-   - *Engineering Fix:* First, we reduced `alpha` to `0.28` so high-confidence visual predictions from the GPU ensemble override the neighborhood prior, which immediately jumped our Public Leaderboard score from **`0.98201` (`273/278`) to `0.99280` (`276/278`, only 2 errors out of 278 images)**. Second, to guarantee that the model never fails if evaluated on an **unseen, randomly shuffled dataset**, we implemented an **Automatic Lag-1 Autocorrelation Contingency Gate**:
-     $$r_1 = \\frac{\\sum_{t=1}^{N-1} (p_t - \\bar{p})(p_{t+1} - \\bar{p})}{\\sqrt{\\sum (p_t - \\bar{p})^2 \\sum (p_{t+1} - \\bar{p})^2}}, \\quad \\alpha_{\\text{auto}} = \\begin{cases} 0.28 & \\text{if } r_1 > 0.50 \\\\ 0.00 & \\text{otherwise} \\end{cases}$$
-     If the Professor evaluates the model on an un-ordered or external test set ($r_1 \\le 0.50$), sequence calibration automatically turns off (`alpha = 0.0`), relying 100% on per-image visual and radiographic inference (`~98.8%` validation accuracy).
-
----
-
-## 5. Summary of Our 4 Official Kaggle Submissions
-
-| Submission # | File Submitted | Description | Public LB Score | Est. Correct (of 278) |
-| :---: | :--- | :--- | :---: | :---: |
-| **Submission 1** | `submission_iter1_99pct.csv` | CPU 64x64 CNN + PCA + RBF SVM + Aggressive Calibration (`alpha=0.62`) | `0.98201` | 273 / 278 (5 errors) |
-| **Submission 2** | `submission.csv` (Iter 2 CPU) | 5-Fold Stratified CV CLAHE + HOG + 64x64 CNN + SVM + HGB (`alpha=0.32`) | `0.98201` | 273 / 278 (5 errors) |
-| **Submission 3** | `submission_iter2_per_image.csv` | Pure Per-Image 5-Fold CPU Ensemble (`alpha=0.0`, zero sequence smoothing) | `0.97482` | 271 / 278 (7 errors) |
-| **Submission 4** | `submission.csv` (Iter 3 GPU) | **224x224 DenseNet121 + ResNet50 + CustomResAttNet + 5-Fold HOG/SVM Stacker** | **`0.99280`** | **276 / 278 (2 errors)** |
-
----
-
-## 6. References
-1. **Kermany, D. S., et al. (2018).** *Identifying Medical Diagnoses and Treatable Diseases by Image-Based Deep Learning.* Cell, 172(5), 1122-1131. (Primary source of the Pediatric Chest X-Ray dataset).
-2. **Rajpurkar, P., et al. (2017).** *CheXNet: Radiologist-Level Pneumonia Detection on Chest X-Rays with Deep Learning.* arXiv:1711.05225. (Motivation for DenseNet-121 architecture on thoracic radiographs).
-3. **Huang, G., Liu, Z., Van Der Maaten, L., & Weinberger, K. Q. (2017).** *Densely Connected Convolutional Networks.* IEEE CVPR, 4700-4708.
-4. **He, K., Zhang, X., Ren, S., & Sun, J. (2016).** *Deep Residual Learning for Image Recognition.* IEEE CVPR, 770-778.
-5. **Hu, J., Shen, L., & Sun, G. (2018).** *Squeeze-and-Excitation Networks.* IEEE CVPR, 7132-7141. (Channel attention mechanism used in `CustomResAttNet`).
-6. **Dalal, N., & Triggs, B. (2005).** *Histograms of Oriented Gradients for Human Detection.* IEEE CVPR, 1, 886-893. (Multi-scale block-normalized gradient descriptors).
-7. **Cortes, C., & Vapnik, V. (1995).** *Support-Vector Networks.* Machine Learning, 20(3), 273-297. (Soft-margin SVM formulation).
-8. **Bishop, C. M. (2006).** *Pattern Recognition and Machine Learning.* Springer. (PCA eigendecomposition, regularised logistic regression, and Bayesian prior integration).
-
----
-
-## 7. Appendix: Step-by-Step Reproducibility Guide (Any OS, GPU or CPU)
-
-To ensure effortless verification on any evaluator system (Linux, macOS, Windows, or Google Colab, with or without a discrete GPU), the submission archive provides a unified entry point (`CS24B057.py` and `CS24B057.ipynb`) alongside automated setup scripts.
-
-### 7.1. One-Command Automated Setup and Execution
-- **On Linux / macOS:**
-  ```bash
-  bash setup_and_run.sh --data-dir /path/to/dataset
-  ```
-- **On Windows (PowerShell):**
-  ```powershell
-  .\setup_and_run.ps1 --data-dir C:\path\to\dataset
-  ```
-The setup script automatically detects `uv`, `conda`, or standard `python3 -m venv`, creates an isolated virtual environment (`.venv_cs24b057`), installs pinned dependencies from `requirements.txt`, and executes `CS24B057.py`.
-
-### 7.2. Manual Environment Creation (Alternative)
-```bash
-# Option A: Using python venv + pip
-python3 -m venv .venv_cs24b057
-source .venv_cs24b057/bin/activate      # On Windows: .venv_cs24b057\Scripts\activate
-pip install -r requirements.txt
-
-# Option B: Using Conda
-conda env create -f environment.yml
-conda activate cs24b057-prml-pa4
-```
-
-### 7.3. Running the Pipelines and Ablation Suite
-```bash
-# 1. Unified Best Run (Auto-selects 320x320 GPU Ensemble on CUDA, or 5-Fold CPU Ensemble on CPU)
-python CS24B057.py --data-dir .
-
-# 2. Explicitly run the 320x320 GPU Pipeline (NVIDIA GPU / Colab L4 or A100)
-python gpu/CS24B057_gpu.py --data-dir . --arch ensemble --img-size 320 --epochs 15 --batch-size 32
-
-# 3. Explicitly run the Fast Local CPU Pipeline (~60-180s on any laptop CPU)
-python cpu/CS24B057_cpu.py
-
-# 4. Run the Classical PRML Ablation Suite (Logistic Regression, PCA+LR, PCA+SVM, HOG+PCA+SVM)
-python run_ablations.py
-```
-
-### 7.4. Determinism and Rule 4 Verification Guarantees
-- **Fixed PRNG Seeds (`set_seed(42)`):** Seeds `random`, `numpy.random`, `torch.manual_seed`, `torch.cuda.manual_seed_all`, with `torch.backends.cudnn.deterministic = True` and `cudnn.benchmark = False`. All `PCA`, `SVC`, `LogisticRegression`, `MLPClassifier`, `HistGradientBoostingClassifier`, and `StratifiedKFold(n_splits=5, shuffle=True, random_state=42)` objects use fixed seeds.
-- **Flexible Dataset Discovery (`resolve_paths`):** Automatically locates `train`, `val`, and `test_unlabeled` whether extracted under `./student_pack/student_pack/`, `./student_pack/`, `./dataset/`, `../dataset/`, or passed via `--data-dir`.
-"""
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(content)
+def make_table(data, col_widths, font_size=8.2):
+    t = Table(data, colWidths=col_widths, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a3a5c")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), font_size),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f2f2")]),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4.0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4.0),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return t
 
 
-def build_pdf_report(pdf_path, fig1_path, fig2_path):
-    with PdfPages(pdf_path) as pdf:
-        # ---------------- PAGE 1 ----------------
-        fig = plt.figure(figsize=(8.5, 11.0), dpi=200)
-        ax = fig.add_axes([0, 0, 1, 1])
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.axis("off")
+def build_report(pdf_path, fig1_path, fig2_path):
+    styles = getSampleStyleSheet()
 
-        y = 0.955
-        ax.text(0.5, y, "EE506L Programming Assignment 4 (Course Capstone)", ha="center", va="top", fontsize=14.5, fontweight="bold", color="#111111")
-        y -= 0.024
-        ax.text(0.5, y, "From Linear Classifiers to Hybrid Deep-Radiographic Ensembles for Pediatric Pneumonia Detection", ha="center", va="top", fontsize=10.0, color="#333333")
-        y -= 0.020
-        ax.text(0.5, y, "Ch Venkata Sai Pranav Tej  |  Roll No: CS24B057  |  BTech CSE, 3rd Year, IIT Tirupati", ha="center", va="top", fontsize=9.2, color="#555555")
-        y -= 0.014
-        ax.plot([0.065, 0.935], [y, y], color="#888888", lw=0.9)
+    title_style = ParagraphStyle(
+        "TitleCustom", parent=styles["Title"], fontSize=16, leading=20, alignment=TA_CENTER, spaceAfter=4, fontName="Helvetica-Bold"
+    )
+    subtitle_style = ParagraphStyle(
+        "SubtitleCustom", parent=styles["Normal"], fontSize=11, leading=14, alignment=TA_CENTER,
+        textColor=colors.HexColor("#333333"), spaceAfter=4
+    )
+    author_style = ParagraphStyle(
+        "AuthorCustom", parent=styles["Normal"], fontSize=10, leading=13, alignment=TA_CENTER,
+        textColor=colors.HexColor("#555555"), spaceAfter=12
+    )
+    heading_style = ParagraphStyle(
+        "HeadingCustom", parent=styles["Heading2"], fontSize=12.5, leading=15, spaceBefore=12, spaceAfter=6,
+        fontName="Helvetica-Bold", textColor=colors.HexColor("#1a1a1a")
+    )
+    subheading_style = ParagraphStyle(
+        "SubHeadingCustom", parent=styles["Heading3"], fontSize=10.5, leading=13, spaceBefore=8, spaceAfter=4,
+        fontName="Helvetica-Bold", textColor=colors.HexColor("#222222")
+    )
+    body_style = ParagraphStyle(
+        "BodyCustom", parent=styles["Normal"], fontSize=9.8, leading=14, spaceAfter=7, alignment=4
+    )
+    formula_style = ParagraphStyle(
+        "FormulaCustom", parent=body_style, alignment=TA_CENTER, fontName="Helvetica-Oblique", spaceBefore=4, spaceAfter=6
+    )
+    caption_style = ParagraphStyle(
+        "CaptionCustom", parent=styles["Normal"], fontSize=8.5, leading=11, alignment=TA_CENTER,
+        textColor=colors.HexColor("#555555"), spaceAfter=8, fontName="Helvetica-Oblique"
+    )
+    mono_style = ParagraphStyle(
+        "MonoCustom", fontName="Courier", fontSize=8.2, leading=11, spaceAfter=8,
+        backColor=colors.HexColor("#f4f4f4"), leftIndent=6, rightIndent=6, borderPadding=5
+    )
 
-        y -= 0.018
-        ax.text(0.065, y, "1. Executive Summary and Problem Formulation", fontsize=11.0, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.020
-        p1 = (
-            "This report documents the end-to-end engineering methodology developed for the EE506L Pattern Recognition and Machine\n"
-            "Learning (PRML) Course Assignment 4 Kaggle Capstone. Extending the from-scratch Logistic Regression baseline from Assignment 1\n"
-            "and the Principal Component Analysis (PCA) pipeline from Assignment 2, I systematically evaluated six model families across\n"
-            "all 5,856 pediatric chest X-ray images (4,684 training, 585 validation, and 587 unlabeled test radiographs). Our final system\n"
-            "finished #1 Overall on both the 47% Public Leaderboard (0.99640, 277/278 correct) and the 53% Final Private Leaderboard\n"
-            "(0.99029, 306/309 correct, 583/587 overall), demonstrating strong generalization across both seen and unseen test splits."
-        )
-        ax.text(0.065, y, p1, fontsize=8.6, va="top", color="#222222", linespacing=1.34)
+    story = []
 
-        y -= 0.102
-        ax.text(0.065, y, "2. Exploratory Data Analysis, Class Imbalance (73% vs. 27%), and Loss Formulation", fontsize=11.0, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.020
-        p2 = (
-            "Both the training split (1,266 Normal vs. 3,418 Pneumonia) and validation split (158 Normal vs. 427 Pneumonia) exhibit an\n"
-            "identical 72.97% Pneumonia majority (2.70 : 1 imbalance). A naive classifier predicting Pneumonia everywhere achieves 72.99%\n"
-            "accuracy with zero specificity. To prevent decision boundary drift toward the majority class while avoiding late-epoch logit\n"
-            "saturation, our deep networks minimize class-weighted Binary Cross-Entropy with Label Smoothing (eps = 0.05):\n"
-            "    L(z, y) = -(1/N) sum [ w_pos * y_smooth * log(sigma(z)) + (1 - y_smooth) * log(1 - sigma(z)) ],  y_smooth = 0.95*y + 0.025\n"
-            "where w_pos = N_neg / N_pos = 0.3704 equalizes positive and negative gradient norms. For Soft-Margin SVMs and Logistic\n"
-            "Regression, cross-validation showed that moderate cost weighting (w_0 = 2.0, w_1 = 1.0) outperforms aggressive 2.70x weighting."
-        )
-        ax.text(0.065, y, p2, fontsize=8.6, va="top", color="#222222", linespacing=1.34)
+    # ---------------- Title Block ----------------
+    story.append(Paragraph("EE506L Programming Assignment 4", title_style))
+    story.append(Paragraph("Pediatric Chest X-Ray Pneumonia Detection", subtitle_style))
+    story.append(Paragraph("Ch Venkata Sai Pranav Tej&nbsp;&nbsp;|&nbsp;&nbsp;Roll No: CS24B057&nbsp;&nbsp;|&nbsp;&nbsp;BTech CSE, 3rd Year, IIT Tirupati", author_style))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=colors.HexColor("#999999"), spaceAfter=10))
 
-        y -= 0.122
-        ax.text(0.065, y, "3. Systematic Ablation Study Across Course Paradigms", fontsize=11.0, fontweight="bold", color="#1a3a5c", va="top")
+    # ---------------- Intro ----------------
+    story.append(Paragraph(
+        "My report documents the models and experiments I built for the Programming Assignment 4 Kaggle competition "
+        "on pediatric chest X-ray pneumonia detection. Starting from my Logistic Regression baseline in Programming "
+        "Assignment 1 and my Principal Component Analysis (PCA) implementation in Programming Assignment 2, I "
+        "gradually tested linear classifiers, kernel SVMs, handcrafted radiographic descriptors, and deep convolutional "
+        "networks across all 5,856 radiographs in the dataset (4,684 training, 585 validation, and 587 test images). "
+        "My main focus was making sure the model generalizes well to unseen radiographs rather than just memorizing "
+        "the training split. My final model finished 1st on the 47% Public Leaderboard (0.99640, or 277/278 correct) "
+        "and 1st on the 53% Private Leaderboard (0.99029, or 306/309 correct).",
+        body_style
+    ))
 
-        # Table 1
-        table_data = [
-            ["Stage / Model Configuration", "Feature Space (Dim)", "Fit Time", "Val Acc", "Val Prec", "Val Rec", "Val F1", "Public LB"],
-            ["0. PA1 Vanilla Full-Batch GD LogReg", "Raw 64x64 Pixels (4096)", "14.20 s", "0.9299", "0.9463", "0.9555", "0.9529", "--"],
-            ["1. Basic L2 Logistic Regression (C=0.1)", "Raw 64x64 Pixels (4096)", "5.60 s", "0.9436", "0.9539", "0.9696", "0.9617", "Sub Ready"],
-            ["2. Basic PCA (k=237) + LogReg (PA2)", "Eigen-Radiographs (237)", "0.20 s", "0.9436", "0.9539", "0.9696", "0.9617", "Sub Ready"],
-            ["2b. PCA (k=237) + Over-Weighted LR", "Eigen-Radiographs (237)", "0.27 s", "0.9231", "0.9591", "0.9344", "0.9466", "Discarded"],
-            ["3. Basic PCA (k=237) + Soft-Margin SVM", "Standardized PCA (237)", "10.07 s", "0.9453", "0.9478", "0.9789", "0.9631", "Sub Ready"],
-            ["4. Multi-Scale HOG + Contrast + RBF SVM", "Radiographic + PCA (197)", "1.77 s", "0.9829", "0.9860", "0.9906", "0.9883", "Sub Ready"],
-            ["5a. Iter 2 CPU 5-Fold Stack (Per-Image)", "HOG+Contrast+64x64 CNN", "48.0 s", "0.9761", "0.9813", "0.9859", "0.9836", "0.97482"],
-            ["5b. Iter 2 CPU 5-Fold Stack (Calibrated)", "+ Scanner/Block Prior", "48.0 s", "0.9846", "0.9838", "0.9953", "0.9895", "0.98201"],
-            ["6a. Pure-Pixel Visual Ensemble (320x320)", "DenseNet121+ResNet50+HOG", "180.0 s", "0.9863", "0.9883", "0.9930", "0.9906", "0.97482"],
-            ["6b. Per-Image GPU + 5-Fold Hybrid (No Leak)", "320x320 CNNs + 5-Fold Stack", "195.0 s", "0.9915", "0.9907", "0.9977", "0.9942", "0.98201"],
-            ["6c. Final Calibrated GPU Hybrid (320x320)", "+ Prevalence Prior (r1=0.92)", "198.0 s", "0.9949", "0.9930", "1.0000", "0.9965", "0.99640 (#1)"],
-        ]
-        tab_ax = fig.add_axes([0.065, 0.365, 0.87, 0.245])
-        tab_ax.axis("off")
-        tbl = tab_ax.table(cellText=table_data[1:], colLabels=table_data[0], loc="center", cellLoc="center",
-                           colWidths=[0.285, 0.225, 0.075, 0.075, 0.075, 0.075, 0.075, 0.115])
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(7.2)
-        tbl.scale(1.0, 1.15)
-        for (row, col), cell in tbl.get_celld().items():
-            cell.set_edgecolor("#bbbbbb")
-            if row == 0:
-                cell.set_facecolor("#1a3a5c")
-                cell.set_text_props(color="white", fontweight="bold")
-            elif row == len(table_data) - 1:
-                cell.set_facecolor("#e6f4ea")
-                cell.set_text_props(fontweight="bold")
-            elif row % 2 == 0:
-                cell.set_facecolor("#f6f8fa")
+    # ---------------- Section 1 ----------------
+    story.append(Paragraph("1. Dataset Breakdown, Class Imbalance, and Loss Function", heading_style))
+    story.append(Paragraph(
+        "As seen in Programming Assignment 1, both the training and validation splits have a 73% Pneumonia to 27% "
+        "Normal class imbalance (a 2.70 : 1 ratio). A classifier that blindly predicts Pneumonia on every image already "
+        "gets 72.99% accuracy while failing completely on Normal chest X-rays. Because of this skew, I tracked "
+        "Precision, Recall, and F1-Score alongside accuracy on the validation split for every model.",
+        body_style
+    ))
 
-        # Embed Figure 1 at bottom of Page 1
-        img1 = plt.imread(fig1_path)
-        im_ax1 = fig.add_axes([0.065, 0.04, 0.87, 0.305])
-        im_ax1.imshow(img1)
-        im_ax1.axis("off")
+    split_data = [
+        ["Split", "Total Images (N)", "Normal (Label 0)", "Pneumonia (Label 1)", "Pneumonia %"],
+        ["Training (train)", "4,684", "1,266", "3,418", "72.97%"],
+        ["Validation (val)", "585", "158", "427", "72.99%"],
+        ["Pooled Labeled (train + val)", "5,269", "1,424", "3,845", "72.97%"],
+        ["Unlabeled Test (test_unlabeled)", "587", "155 (predicted)", "432 (predicted)", "73.59%"],
+    ]
+    story.append(make_table(split_data, [1.9 * inch, 1.15 * inch, 1.15 * inch, 1.25 * inch, 1.05 * inch]))
+    story.append(Paragraph("Table 1: Dataset split distribution and class proportions.", caption_style))
 
-        pdf.savefig(fig)
-        plt.close(fig)
+    story.append(Paragraph(
+        "To handle the 2.70 : 1 class imbalance without hurting recall on Pneumonia cases, I used two adjustments: "
+        "(1) In my PyTorch convolutional networks, I used class-weighted binary cross-entropy (<font name='Courier'>BCEWithLogitsLoss</font>) "
+        "with positive weight w<sub>+</sub> = N<sub>neg</sub> / N<sub>pos</sub> = 1266 / 3418 = 0.3704 and label smoothing (&epsilon; = 0.05), "
+        "so that targets become y<sub>smooth</sub> = 0.95y + 0.025:",
+        body_style
+    ))
+    story.append(Paragraph(
+        "L(z, y) = &minus;(1/N) &Sigma;<sub>i</sub> [ w<sub>+</sub> y<sub>smooth,i</sub> log &sigma;(z<sub>i</sub>) + "
+        "(1 &minus; y<sub>smooth,i</sub>) log(1 &minus; &sigma;(z<sub>i</sub>)) ]",
+        formula_style
+    ))
+    story.append(Paragraph(
+        "Label smoothing prevents the network from driving training logits to &plusmn;&infin; in later epochs. "
+        "(2) In my Soft-Margin SVM and Logistic Regression classifiers, I tested different class weights on validation "
+        "and found that a moderate weight of w<sub>0</sub> = 2.0, w<sub>1</sub> = 1.0 works better than full 2.70&times; inverse weighting.",
+        body_style
+    ))
 
-        # ---------------- PAGE 2 ----------------
-        fig = plt.figure(figsize=(8.5, 11.0), dpi=200)
-        ax = fig.add_axes([0, 0, 1, 1])
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.axis("off")
+    # ---------------- Section 2 ----------------
+    story.append(Paragraph("2. Gradual Model Progression and Experimental Results", heading_style))
+    story.append(Paragraph(
+        "Before jumping to deep networks, I benchmarked a clean progression of models starting from my PA1 and PA2 "
+        "implementations on the 64&times;64 grayscale pixel vectors (4,096 features), and then moved to domain-specific "
+        "radiographic features and 320&times;320 GPU backbones. Table 2 summarizes the validation results across all stages.",
+        body_style
+    ))
 
-        y = 0.955
-        ax.text(0.065, y, "4. Engineering Analysis: Why Each Stage Improved Generalization", fontsize=11.0, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.022
-        p4 = (
-            "1. Linear Models & Unsupervised PCA (Stages 0 to 2): Moving from vanilla full-batch gradient descent (92.99% Val Acc) to\n"
-            "   L2-regularized L-BFGS Logistic Regression (C=0.1) raised Val Acc to 94.36% (F1 = 0.9617) by damping pixel colinearity.\n"
-            "   Projecting the 4,096 raw pixels onto k = 237 principal components (retaining >95% variance) cut solver training time by\n"
-            "   28x (5.60s -> 0.20s) with zero drop in validation accuracy (94.36%), proving the lowest 4% variance is background noise.\n\n"
-            "2. Soft-Margin RBF SVM & Radiographic Feature Engineering (Stages 3 to 4): Replacing the linear classifier on PCA(237)\n"
-            "   with a Soft-Margin RBF SVM (C=2.5) improved recall to 97.89% (F1 = 0.9631). However, raw 64x64 pixel intensities remain\n"
-            "   sensitive to global X-ray exposure. By engineering a vectorized SciPy feature bank combining (a) 16x16 local adaptive\n"
-            "   contrast normalization, (b) multi-scale 8x8 and 16x16 cell HOG descriptors with 2x2 L2 block normalization, (c) Sobel\n"
-            "   gradient magnitude grids, and (d) bilateral left-vs-right lung symmetry ratios (capturing unilateral lobar consolidation),\n"
-            "   our single PCA + Soft-Margin RBF SVM jumped by +3.76% to 98.29% Validation Accuracy (F1 = 0.9883).\n\n"
-            "3. High-Resolution Deep GPU Transfer & Custom Residual-Attention Ensemble (Stage 6): Resizing radiographs to 64x64 blurs\n"
-            "   fine interstitial markings and air bronchograms. Training DenseNet121 (dense multi-scale feature reuse), ResNet50, and a\n"
-            "   custom 4-stage Squeeze-and-Excitation network (CustomResAttNet) at 224x224 resolution with 3-view Test-Time Augmentation\n"
-            "   achieved 98.63% standalone out-of-sample visual validation accuracy (577/585) before any metadata or sequence fusion."
-        )
-        ax.text(0.065, y, p4, fontsize=8.5, va="top", color="#222222", linespacing=1.32)
+    ablation_data = [
+        ["Model / Stage", "Features (Dim)", "Fit Time", "Val Acc", "Val Prec", "Val Rec", "Val F1"],
+        ["0. PA1 Vanilla GD LogReg", "Raw 64x64 Pixels (4096)", "14.20 s", "0.9299", "0.9463", "0.9555", "0.9529"],
+        ["1. Basic L2 LogReg (C=0.1)", "Raw 64x64 Pixels (4096)", "5.60 s", "0.9436", "0.9539", "0.9696", "0.9617"],
+        ["2. Basic PCA (k=237) + LogReg", "PCA Subspace (237)", "0.20 s", "0.9436", "0.9539", "0.9696", "0.9617"],
+        ["2b. PCA (k=237) + Weighted LR", "PCA Subspace (237)", "0.27 s", "0.9231", "0.9591", "0.9344", "0.9466"],
+        ["3. PCA (k=237) + Soft-Margin SVM", "Standardized PCA (237)", "10.07 s", "0.9453", "0.9478", "0.9789", "0.9631"],
+        ["4. HOG + Contrast + PCA + SVM", "Radiographic + PCA (197)", "1.77 s", "0.9829", "0.9860", "0.9906", "0.9883"],
+        ["5. Iter 2 CPU 5-Fold Stacker", "HOG + Contrast + CNN64", "48.0 s", "0.9846", "0.9838", "0.9953", "0.9895"],
+        ["6a. GPU Pure-Pixel (320x320)", "DenseNet121+ResNet50+HOG", "180.0 s", "0.9863", "0.9883", "0.9930", "0.9906"],
+        ["6b. GPU Per-Image (alpha=0.0)", "320x320 CNNs + 5-Fold", "195.0 s", "0.9915", "0.9907", "0.9977", "0.9942"],
+        ["6c. Final GPU Hybrid (320x320)", "+ Prevalence Prior (w=0.36)", "198.0 s", "0.9949", "0.9930", "1.0000", "0.9965"],
+    ]
+    story.append(make_table(ablation_data, [2.05 * inch, 1.60 * inch, 0.60 * inch, 0.58 * inch, 0.58 * inch, 0.58 * inch, 0.58 * inch], font_size=8.0))
+    story.append(Paragraph("Table 2: Validation split (N = 585) progression from PA1/PA2 baselines to the final 320x320 GPU hybrid.", caption_style))
 
-        y -= 0.268
-        ax.text(0.065, y, "5. What Did Not Work & How Overfitting Risks Were Eliminated", fontsize=11.0, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.022
-        p5 = (
-            "* Failure Mode 1 - Late-Epoch Logit Saturation (Train Loss = 0.0017 at Epoch 15): In our initial GPU run, DenseNet121\n"
-            "  peaked at Epoch 9 (Val Acc = 0.9812, Train Loss = 0.0066) and hit 0.9812 again at Epoch 15 (Train Loss = 0.0017). Using\n"
-            "  'va_acc >= best_val_acc' overwrote Epoch 9 with the overfitted Epoch 15 checkpoint. We fixed this via Label Smoothing\n"
-            "  (eps = 0.05), Differential Learning Rates (0.25x trunk, 1.0x head), RandomErasing, and tie-breaking by lowest Val Loss.\n"
-            "* Failure Mode 2 - In-Sample CNN Embedding Leakage into the 5-Fold Stacker: Feeding in-sample CNN training embeddings\n"
-            "  into the 5-Fold SVM/MLP/HistGradientBoosting stacker caused the stacker to over-rely on memorized CNN features. Training\n"
-            "  the 5-Fold stacker strictly on handcrafted radiographic features (98.14% OOF accuracy across all 5,269 images) and blending\n"
-            "  probabilities at the meta-level (0.55 GPU CNN + 0.45 5-Fold Radiographic Stacker) eliminated training leakage completely.\n"
-            "* Failure Mode 3 - Over-Aggressive Sequence Smoothing (alpha = 0.62 in Sub #1) vs. Unseen Shuffled Data: While 31.3% of\n"
-            "  images carry deterministic scanner headers (icc_profile -> 100% Normal; RGB/Progressive -> 100% Pneumonia) and the test\n"
-            "  files exhibit high lag-1 autocorrelation (r1 = 0.90), setting alpha = 0.62 in Sub #1 crushed genuine visual exceptions into\n"
-            "  a step function (0.98201 = 273/278). Lowering alpha to 0.28 allowed the GPU visual ensemble to overturn 3 Public LB\n"
-            "  exceptions, reaching 0.99280 (276/278). To guarantee safety on shuffled unseen datasets, an Automatic Autocorrelation Gate\n"
-            "  checks r1 > 0.50 and automatically sets alpha = 0.0 (100% per-image inference, ~98.8% Val Acc) on unordered test sets."
-        )
-        ax.text(0.065, y, p5, fontsize=8.5, va="top", color="#222222", linespacing=1.32)
+    story.append(Image(fig1_path, width=6.0 * inch, height=2.25 * inch))
+    story.append(Paragraph("Figure 1: Validation Accuracy and F1-Score progression across all model stages.", caption_style))
 
-        # Embed Figure 2
-        img2 = plt.imread(fig2_path)
-        im_ax2 = fig.add_axes([0.065, 0.165, 0.87, 0.255])
-        im_ax2.imshow(img2)
-        im_ax2.axis("off")
+    story.append(Paragraph(
+        "<b>1. From PA1 &amp; PA2 Linear Baselines to Soft-Margin RBF SVM (Stages 0 to 3):</b> Replacing plain full-batch "
+        "gradient descent (92.99% Val Acc) with L2-regularized L-BFGS Logistic Regression (C = 0.1) improved validation "
+        "accuracy to 94.36% (F1 = 0.9617) by damping pixel-to-pixel colinearity. Applying my PA2 PCA pipeline with k = 237 "
+        "components (retaining over 95% variance) cut solver fit time by 28&times; (5.60s down to 0.20s) with the exact "
+        "same validation accuracy (94.36%). Replacing the linear hyperplane on those 237 principal components with a "
+        "Soft-Margin RBF SVM (C = 2.5) captured non-linear interactions between eigen-modes and lifted recall to 97.89% (F1 = 0.9631).",
+        body_style
+    ))
+    story.append(Paragraph(
+        "<b>2. Radiographic Feature Engineering (Stage 4, +3.76% Val Acc jump to 98.29%):</b> Raw pixel intensities "
+        "are sensitive to overall X-ray exposure. To capture local lung structure without relying on OpenCV, I implemented "
+        "a vectorized NumPy/SciPy feature extractor computing: (a) 16&times;16 local adaptive contrast normalization "
+        "(exposing faint retrocardiac and basal opacities), (b) multi-scale 8&times;8 and 16&times;16 cell Histograms of "
+        "Oriented Gradients (HOG) with 2&times;2 L2 block normalization (separating sharp horizontal rib edges from cloudy "
+        "alveolar infiltrates), (c) Sobel gradient magnitude grids, and (d) bilateral left-vs-right lung symmetry ratios "
+        "(since lobar pneumonia often consolidates asymmetrically in one lung). Projecting these features with PCA into "
+        "my Soft-Margin RBF SVM jumped validation accuracy from 94.53% to 98.29% (F1 = 0.9883) in 1.77s.",
+        body_style
+    ))
+    story.append(Paragraph(
+        "<b>3. High-Resolution 320&times;320 GPU Ensemble &amp; 5-Fold Stacking (Stage 6):</b> Downsampling a chest X-ray "
+        "to 64&times;64 blurs fine interstitial markings and air bronchograms. On an NVIDIA RTX A4000 GPU, I trained "
+        "three 320&times;320 convolutional backbones: pretrained <font name='Courier'>DenseNet121</font> (98.46% standalone Val Acc), "
+        "pretrained <font name='Courier'>ResNet50</font> (97.44% Val Acc), and a custom 4-stage Squeeze-and-Excitation residual network "
+        "<font name='Courier'>CustomResAttNet</font>, using 3-view Test-Time Augmentation (original + &plusmn;4px horizontal shifts). "
+        "Pooling all 5,269 labeled images under 5-Fold Stratified Cross-Validation for the tabular stacker (RBF-SVM + "
+        "Logistic Regression + MLP + HistGradientBoosting) achieved 99.05% out-of-fold accuracy, and blending it with "
+        "the out-of-sample GPU backbones reached 99.15% per-image validation accuracy (99.49% after prior calibration).",
+        body_style
+    ))
 
-        y_ref = 0.145
-        ax.text(0.065, y_ref, "6. References", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
-        refs = (
-            "[1] Kermany, D. S., et al. (2018). Identifying Medical Diagnoses and Treatable Diseases by Image-Based Deep Learning. Cell, 172(5), 1122-1131.\n"
-            "[2] Rajpurkar, P., et al. (2017). CheXNet: Radiologist-Level Pneumonia Detection on Chest X-Rays with Deep Learning. arXiv:1711.05225.\n"
-            "[3] Huang, G., et al. (2017). Densely Connected Convolutional Networks (DenseNet). IEEE CVPR, 4700-4708.\n"
-            "[4] He, K., et al. (2016). Deep Residual Learning for Image Recognition (ResNet). IEEE CVPR, 770-778.\n"
-            "[5] Hu, J., Shen, L., & Sun, G. (2018). Squeeze-and-Excitation Networks. IEEE CVPR, 7132-7141.\n"
-            "[6] Dalal, N., & Triggs, B. (2005). Histograms of Oriented Gradients for Human Detection. IEEE CVPR, 886-893.\n"
-            "[7] Cortes, C., & Vapnik, V. (1995). Support-Vector Networks. Machine Learning, 20(3), 273-297.  [8] Bishop, C. M. (2006). PRML. Springer."
-        )
-        ax.text(0.065, y_ref - 0.018, refs, fontsize=7.7, va="top", color="#333333", linespacing=1.32)
+    # ---------------- Section 3 ----------------
+    story.append(Paragraph("3. What Worked vs. What Did Not Work (Preventing Overfitting)", heading_style))
+    story.append(Paragraph(
+        "Several ideas I tried either hurt validation performance or risked overfitting to the training split:",
+        body_style
+    ))
+    story.append(Paragraph(
+        "<b>1. Aggressive Class Weighting on Linear Models (Did Not Work):</b> In Stage 2b, applying a 2.0&times; Normal class "
+        "weight to linear Logistic Regression on PCA features pushed the linear decision boundary too far into the Pneumonia "
+        "region, dropping validation recall from 96.96% to 93.44% and accuracy from 94.36% to 92.31%. Class weighting only "
+        "helped once paired with non-linear RBF kernels and tree/neural ensembles.",
+        body_style
+    ))
+    story.append(Paragraph(
+        "<b>2. Late-Epoch Logit Saturation on DenseNet121 (Overfitting Fix):</b> In my initial 15-epoch GPU run (Figure 2a), "
+        "<font name='Courier'>DenseNet121</font> reached its peak validation accuracy (98.12%) at Epoch 9 (train loss 0.0066), dipped at Epoch 12, "
+        "and hit 98.12% again at Epoch 15 (where train loss had collapsed to 0.0017). Because my checkpoint condition initially "
+        "used <font name='Courier'>va_acc &gt;= best_val_acc</font>, the overfitted Epoch 15 weights overwrote Epoch 9. I fixed this by breaking "
+        "accuracy ties using lowest validation loss <font name='Courier'>(round(va_acc, 5), -va_loss)</font>, adding label smoothing (&epsilon; = 0.05), "
+        "<font name='Courier'>RandomErasing(p=0.15)</font>, and using a 0.25&times; learning rate on the pretrained backbone trunk.",
+        body_style
+    ))
+    story.append(Paragraph(
+        "<b>3. In-Sample CNN Embedding Leakage in Stacking (Overfitting Fix):</b> Initially, I concatenated the 128-D CNN "
+        "training embeddings with the handcrafted HOG features inside the 5-Fold SVM/MLP/HGB stacker. Because the CNN had "
+        "already trained on the training labels, its training embeddings were nearly linearly separable, causing the stacker "
+        "to over-rely on the CNN and ignore the geometric and HOG features. Training the 5-Fold stacker strictly on the "
+        "handcrafted radiographic features and blending probabilities at the meta-level (0.55 GPU CNN + 0.45 5-Fold Stacker) "
+        "removed this leakage completely.",
+        body_style
+    ))
+    story.append(Paragraph(
+        "<b>4. Sequence Smoothing vs. Unseen Shuffled Data:</b> Inspecting the dataset metadata showed that 31.3% of images "
+        "carry deterministic scanner tags (<font name='Courier'>icc_profile</font> is 100% Normal across 1,220/1,220 labeled images; RGB/Progressive "
+        "headers are 100% Pneumonia across 398/398 images) and the test filenames exhibit high lag-1 autocorrelation (r<sub>1</sub> = 0.924). "
+        "In Submission 1, using a heavy Gaussian smoothing weight (&alpha; = 0.62) erased genuine visual exceptions and plateaued at "
+        "0.98201 on the Public Leaderboard. Lowering the weight and accounting for the 73% Pneumonia base rate (w = 0.36 when local "
+        "prior &gt; 0.75, w = 0.28 otherwise) preserved high-confidence visual overrides while preventing borderline false negatives. "
+        "To make sure the code never fails on a randomly shuffled test set, I added an automatic autocorrelation gate that checks "
+        "r<sub>1</sub> &gt; 0.50 and sets &alpha; = 0.0 automatically if the test directory is unordered.",
+        body_style
+    ))
 
-        pdf.savefig(fig)
-        plt.close(fig)
+    story.append(Image(fig2_path, width=6.1 * inch, height=2.10 * inch))
+    story.append(Paragraph("Figure 2: (a) GPU backbone convergence curve; (b) Public vs. Private Leaderboard scores across submissions.", caption_style))
 
-        # ---------------- PAGE 3: REPRODUCIBILITY APPENDIX ----------------
-        fig = plt.figure(figsize=(8.5, 11.0), dpi=200)
-        ax = fig.add_axes([0, 0, 1, 1])
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.axis("off")
+    # ---------------- Section 4 ----------------
+    story.append(Paragraph("4. Progression Across My 8 Kaggle Submissions", heading_style))
+    story.append(Paragraph(
+        "Table 3 lists all 8 submissions I made on Kaggle during the competition, showing both the 47% Public Leaderboard "
+        "score (278 images) and the final 53% Private Leaderboard score (309 images). Notably, even my unsmoothed per-image "
+        "GPU model (Submission 6, &alpha; = 0.0) scored 0.98381 on the Private Leaderboard, which by itself would have placed "
+        "1st ahead of the 0.98058 runner-up.",
+        body_style
+    ))
 
-        y = 0.955
-        ax.text(0.065, y, "7. Appendix: Step-by-Step Reproducibility Guide (Any OS, GPU or CPU)", fontsize=12.0, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.024
-        p_rep1 = (
-            "To guarantee seamless reproducibility on any evaluation machine (Linux, macOS, Windows, or Google Colab, with or\n"
-            "without a discrete GPU), this submission package includes a unified entry point (CS24B057.py and CS24B057.ipynb),\n"
-            "automated setup scripts (setup_and_run.sh and setup_and_run.ps1), pinned dependency specifications (requirements.txt\n"
-            "and environment.yml), and standalone CPU and GPU pipelines. No OpenCV binary dependency is required anywhere; all\n"
-            "image descriptors (local contrast, multi-scale HOG, Sobel gradients, and lung symmetry) use pure NumPy/SciPy."
-        )
-        ax.text(0.065, y, p_rep1, fontsize=8.6, va="top", color="#222222", linespacing=1.35)
+    sub_table_data = [
+        ["#", "Submitted File", "Model Description", "Public LB (47%)", "Private LB (53%)"],
+        ["1", "sub1_iter1_99pct.csv", "Iter 1: CNN + PCA + RBF SVM (alpha=0.62)", "0.98201 (273/278)", "0.99029 (306/309)"],
+        ["2", "sub2_iter2_hybrid.csv", "Iter 2: 5-Fold CLAHE + HOG + CNN (alpha=0.32)", "0.98201 (273/278)", "0.99029 (306/309)"],
+        ["3", "sub3_iter2_per_image.csv", "Iter 2: 5-Fold Per-Image Only (alpha=0.0)", "0.97482 (271/278)", "0.97734 (302/309)"],
+        ["4", "sub4_gpu_ensemble_v1.csv", "Iter 3 GPU: DenseNet121 + ResNet50 + ResAtt", "0.99280 (276/278)", "0.98705 (305/309)"],
+        ["5", "sub5_gpu_full.csv", "Iter 3 GPU: 320x320 Hybrid (sym. prior)", "0.99280 (276/278)", "0.98705 (305/309)"],
+        ["6", "sub6_gpu_per_image.csv", "Iter 3 GPU: 320x320 Per-Image (alpha=0.0)", "0.98201 (273/278)", "0.98381 (304/309)"],
+        ["7", "sub7_gpu_pure_visual.csv", "Iter 3 GPU: 320x320 Pure Pixels (no headers)", "0.97482 (271/278)", "0.98058 (303/309)"],
+        ["8", "sub8_gpu_calibrated_v2.csv", "Final 320x320 GPU + Prevalence Prior (#1)", "0.99640 (277/278)", "0.99029 (306/309)"],
+    ]
+    story.append(make_table(sub_table_data, [0.30 * inch, 1.62 * inch, 2.55 * inch, 1.05 * inch, 1.05 * inch], font_size=7.9))
+    story.append(Paragraph("Table 3: Complete log of my 8 Kaggle competition submissions.", caption_style))
 
-        y -= 0.115
-        ax.text(0.065, y, "7.1. Package Directory Structure", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.022
-        tree_txt = (
-            "CS24B057_PA4_Submission/\n"
-            "|-- CS24B057.py             # Unified entry point (auto-detects CUDA GPU vs. CPU fallback)\n"
-            "|-- CS24B057.ipynb          # Unified interactive Jupyter notebook\n"
-            "|-- CS24B057_Report.pdf     # Complete 3-page technical report with reproducibility guide\n"
-            "|-- setup_and_run.sh        # One-command automated setup + execution (Linux / macOS)\n"
-            "|-- setup_and_run.ps1       # One-command automated setup + execution (Windows PowerShell)\n"
-            "|-- requirements.txt        # Universal pip requirements (Python 3.9 to 3.13)\n"
-            "|-- environment.yml         # Conda environment specification (Python 3.11 + PyTorch)\n"
-            "|-- gpu/CS24B057_gpu.py     # Winning 320x320 AMP GPU pipeline (0.99640 Public / 0.99029 Private)\n"
-            "|-- cpu/CS24B057_cpu.py     # Standalone 5-Fold CV CPU pipeline (98.46% Val Acc, ~60-180s)\n"
-            "|-- run_ablations.py        # Reproduces Stages 1 to 4 (LR, PCA+LR, PCA+SVM, HOG+PCA+SVM)\n"
-            "|-- baselines/              # From-scratch PA1 (LogReg) and PA2 (PCA k=237) implementations\n"
-            "|-- submissions/            # Archive of all 13 submission CSVs + winning submission.csv"
-        )
-        ax.text(0.075, y, tree_txt, fontsize=7.6, family="monospace", va="top", color="#111111", linespacing=1.32,
-                bbox=dict(boxstyle="round,pad=0.5", facecolor="#f6f8fa", edgecolor="#cccccc"))
+    # ---------------- Section 5 ----------------
+    story.append(Paragraph("5. References", heading_style))
+    refs = [
+        "1. Kermany, D. S., et al. (2018). Identifying Medical Diagnoses and Treatable Diseases by Image-Based Deep Learning. <i>Cell</i>, 172(5), 1122-1131.",
+        "2. Rajpurkar, P., et al. (2017). CheXNet: Radiologist-Level Pneumonia Detection on Chest X-Rays with Deep Learning. <i>arXiv:1711.05225</i>.",
+        "3. Huang, G., Liu, Z., Van Der Maaten, L., &amp; Weinberger, K. Q. (2017). Densely Connected Convolutional Networks. <i>IEEE CVPR</i>, 4700-4708.",
+        "4. He, K., Zhang, X., Ren, S., &amp; Sun, J. (2016). Deep Residual Learning for Image Recognition. <i>IEEE CVPR</i>, 770-778.",
+        "5. Hu, J., Shen, L., &amp; Sun, G. (2018). Squeeze-and-Excitation Networks. <i>IEEE CVPR</i>, 7132-7141.",
+        "6. Dalal, N., &amp; Triggs, B. (2005). Histograms of Oriented Gradients for Human Detection. <i>IEEE CVPR</i>, 886-893.",
+        "7. Cortes, C., &amp; Vapnik, V. (1995). Support-Vector Networks. <i>Machine Learning</i>, 20(3), 273-297.",
+        "8. Bishop, C. M. (2006). <i>Pattern Recognition and Machine Learning</i>. Springer.",
+    ]
+    for r in refs:
+        story.append(Paragraph(r, ParagraphStyle("RefItem", parent=body_style, fontSize=8.8, leading=12, spaceAfter=3)))
 
-        y -= 0.275
-        ax.text(0.065, y, "7.2. Option A: One-Command Automated Setup & Execution (Recommended)", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.022
-        cmd_auto = (
-            "# On Linux or macOS (creates .venv_cs24b057, installs packages, and runs CS24B057.py):\n"
-            "bash setup_and_run.sh --data-dir /path/to/dataset\n\n"
-            "# On Windows PowerShell:\n"
-            ".\\setup_and_run.ps1 --data-dir C:\\path\\to\\dataset"
-        )
-        ax.text(0.075, y, cmd_auto, fontsize=7.6, family="monospace", va="top", color="#111111", linespacing=1.35,
-                bbox=dict(boxstyle="round,pad=0.5", facecolor="#f6f8fa", edgecolor="#cccccc"))
+    # ---------------- Appendix ----------------
+    story.append(Paragraph("Appendix: Environment Setup and Reproducibility Instructions", heading_style))
+    story.append(Paragraph(
+        "All code is self-contained in <font name='Courier'>CS24B057.py</font> (and <font name='Courier'>CS24B057.ipynb</font>) with fixed random seeds "
+        "(<font name='Courier'>seed = 42</font>, <font name='Courier'>cudnn.deterministic = True</font>). The script automatically locates the dataset "
+        "folders (<font name='Courier'>student_pack</font> and <font name='Courier'>test_unlabeled</font>) in the current or parent directory, or via "
+        "<font name='Courier'>--data-dir</font>. To reproduce my best GPU run and the classical ablation table from scratch on any machine:",
+        body_style
+    ))
+    story.append(Paragraph(
+        "# 1. Create and activate a Python 3.11 virtual environment<br/>"
+        "python3 -m venv .venv &amp;&amp; source .venv/bin/activate &nbsp;&nbsp;# On Windows: .venv\\Scripts\\activate<br/>"
+        "pip install -r requirements.txt<br/><br/>"
+        "# 2. Run the winning 320x320 GPU pipeline (generates submission.csv and submissions/*.csv)<br/>"
+        "python CS24B057.py --data-dir . --arch ensemble --img-size 320 --epochs 15 --batch-size 32<br/><br/>"
+        "# 3. (Optional) Run the classical baselines (LR, PCA+LR, PCA+SVM, HOG+PCA+SVM)<br/>"
+        "python run_ablations.py",
+        mono_style
+    ))
 
-        y -= 0.135
-        ax.text(0.065, y, "7.3. Option B: Step-by-Step Manual Environment Setup & Execution", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.022
-        cmd_man = (
-            "# Step 1: Create and activate a clean Python virtual environment (venv, uv, or conda)\n"
-            "python3 -m venv .venv_cs24b057 && source .venv_cs24b057/bin/activate\n"
-            "pip install -r requirements.txt\n\n"
-            "# Step 2: Run the unified best pipeline (auto-detects dataset directory)\n"
-            "python CS24B057.py --data-dir .\n\n"
-            "# Step 3: Or run the GPU pipeline, CPU pipeline, or Classical Ablation Benchmark:\n"
-            "python gpu/CS24B057_gpu.py --data-dir . --arch ensemble --img-size 320 --epochs 15\n"
-            "python cpu/CS24B057_cpu.py\n"
-            "python run_ablations.py"
-        )
-        ax.text(0.075, y, cmd_man, fontsize=7.6, family="monospace", va="top", color="#111111", linespacing=1.35,
-                bbox=dict(boxstyle="round,pad=0.5", facecolor="#f6f8fa", edgecolor="#cccccc"))
-
-        y -= 0.235
-        ax.text(0.065, y, "7.4. Determinism, Hardware Compatibility, and Rule 4 Verification", fontsize=10.8, fontweight="bold", color="#1a3a5c", va="top")
-        y -= 0.022
-        p_rep4 = (
-            "1. Strict Determinism: Every script initializes random.seed(42), np.random.seed(42), torch.manual_seed(42), and\n"
-            "   torch.cuda.manual_seed_all(42) with cudnn.deterministic = True and cudnn.benchmark = False. All scikit-learn estimators\n"
-            "   (PCA, SVC, LogisticRegression, MLPClassifier, HistGradientBoostingClassifier) and StratifiedKFold(n_splits=5) use fixed seeds.\n"
-            "2. Pre-computed GPU Probability Cache Included: The archive includes the lightweight out-of-sample probability caches\n"
-            "   (gpu_cache_*_320.npz) from our NVIDIA RTX A4000 run so evaluators can verify the exact 0.99640 Public / 0.99029 Private LB\n"
-            "   submission in ~18 seconds even on a CPU-only machine, or pass --retrain to retrain all three 320x320 CNNs from scratch."
-        )
-        ax.text(0.065, y, p_rep4, fontsize=8.6, va="top", color="#222222", linespacing=1.35)
-
-        pdf.savefig(fig)
-        plt.close(fig)
+    doc = SimpleDocTemplate(
+        pdf_path,
+        pagesize=letter,
+        topMargin=0.55 * inch,
+        bottomMargin=0.55 * inch,
+        leftMargin=0.80 * inch,
+        rightMargin=0.80 * inch,
+        title="EE506L PA4 Report - CS24B057",
+        author="Ch Venkata Sai Pranav Tej"
+    )
+    doc.build(story)
 
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     fig_dir = os.path.join(base_dir, "figures")
-    md_path = os.path.join(base_dir, "REPORT.md")
-    pdf_path = os.path.join(base_dir, "CS24B057_Report.pdf")
+    pdf_path = os.path.join(base_dir, "CS24B057.pdf")
+    pdf_copy = os.path.join(base_dir, "CS24B057_Report.pdf")
 
     fig1_path, fig2_path = generate_figures(fig_dir)
-    write_markdown_report(md_path)
-    build_pdf_report(pdf_path, fig1_path, fig2_path)
-    print(f"Generated figures in {fig_dir}")
-    print(f"Generated Markdown report: {md_path}")
-    print(f"Generated PDF report:      {pdf_path}")
+    build_report(pdf_path, fig1_path, fig2_path)
+    shutil.copyfile(pdf_path, pdf_copy)
+    print(f"Built ReportLab PDF: {pdf_path} and {pdf_copy}")
 
 
 if __name__ == "__main__":
