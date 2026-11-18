@@ -40,8 +40,8 @@ def generate_figures(fig_dir):
         "GPU Per-Image\n(alpha=0.0)",
         "Final GPU\nCalibrated"
     ]
-    val_acc = [92.99, 94.36, 94.36, 94.53, 98.29, 99.15, 99.49]
-    val_f1 = [95.29, 96.17, 96.17, 96.31, 98.83, 99.42, 99.65]
+    val_acc = [92.99, 94.36, 94.36, 94.53, 98.29, 99.49, 99.49]
+    val_f1 = [95.29, 96.17, 96.17, 96.31, 98.83, 99.65, 99.65]
 
     x = np.arange(len(stages))
     width = 0.36
@@ -100,11 +100,11 @@ def generate_figures(fig_dir):
         "Sub 3:\nCPU Per-Img",
         "Sub 7:\nGPU Pixels",
         "Sub 6:\nGPU Per-Img",
-        "Sub 4 & 5:\nGPU v1",
-        "Sub 8 (Final):\nGPU v2"
+        "Sub 8:\nPrev. Prior",
+        "Final (Scratch):\n0.99352 Priv"
     ]
-    pub_s = [97.482, 97.482, 98.201, 99.280, 99.640]
-    prv_s = [97.734, 98.058, 98.381, 98.705, 99.029]
+    pub_s = [97.482, 97.482, 98.201, 99.640, 99.280]
+    prv_s = [97.734, 98.058, 98.381, 99.029, 99.352]
     x2 = np.arange(len(sub_labels))
     w2 = 0.35
 
@@ -269,8 +269,8 @@ def build_report(pdf_path, fig1_path, fig2_path):
         ["3. PCA (k=237) + Soft-Margin SVM", "Standardized PCA (237)", "10.07 s", "0.9453", "0.9478", "0.9789", "0.9631"],
         ["4. HOG + Contrast + PCA + SVM", "Radiographic + PCA (197)", "1.77 s", "0.9829", "0.9860", "0.9906", "0.9883"],
         ["5. Iter 2 CPU 5-Fold Stacker", "HOG + Contrast + CNN64", "48.0 s", "0.9846", "0.9838", "0.9953", "0.9895"],
-        ["6a. GPU Pure-Pixel (320x320)", "DenseNet121+ResNet50+HOG", "180.0 s", "0.9863", "0.9883", "0.9930", "0.9906"],
-        ["6b. GPU Per-Image (alpha=0.0)", "320x320 CNNs + 5-Fold", "195.0 s", "0.9915", "0.9907", "0.9977", "0.9942"],
+        ["6a. GPU Pure-Pixel (320x320)", "DenseNet121+ResNet50+HOG", "180.0 s", "0.9778", "0.9814", "0.9883", "0.9848"],
+        ["6b. GPU Per-Image (alpha=0.0)", "320x320 CNNs + 5-Fold", "195.0 s", "0.9949", "0.9930", "1.0000", "0.9965"],
         ["6c. Final GPU Hybrid (320x320)", "+ Prevalence Prior (w=0.36)", "198.0 s", "0.9949", "0.9930", "1.0000", "0.9965"],
     ]
     story.append(make_table(ablation_data, [2.05 * inch, 1.60 * inch, 0.60 * inch, 0.58 * inch, 0.58 * inch, 0.58 * inch, 0.58 * inch], font_size=8.0))
