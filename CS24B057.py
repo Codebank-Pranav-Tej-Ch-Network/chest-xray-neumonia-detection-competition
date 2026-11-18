@@ -293,11 +293,8 @@ def train_and_extract_gpu_model(
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=2e-3)
     else:
         model = BackboneWrapper(arch=arch_name, emb_dim=128).to(device)
-        optimizer = torch.optim.AdamW([
-            {"params": model.backbone.parameters(), "lr": lr * 0.5},
-            {"params": model.proj.parameters(), "lr": lr},
-            {"params": model.head.parameters(), "lr": lr}
-        ], weight_decay=5e-3)
+        # Full learning rate on all layers since weights are initialized from scratch
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr * 2.0, weight_decay=2e-3)
 
     n_neg = float((y_tr == 0).sum())
     n_pos = float((y_tr == 1).sum())
@@ -633,14 +630,14 @@ def main():
     m_tab_all = compute_metrics(y_all, oof_tab_all >= 0.5)
     print(f"5-Fold Tabular OOF Accuracy (All 5269):       {m_tab_all['accuracy']:.4f} | F1: {m_tab_all['f1']:.4f}")
 
-    # Soft Visual-First Fusion: blend Deep Visual CNN even on non-ambiguous headers so unseen scanners generalize safely
+    # Soft Visual-First Fusion: blend Out-of-Sample CNNs (0.35) + 5-Fold From-Scratch Stacker (0.65)
     header_prior_va = np.where(M_va[:, 7] == 1.0, 0.005, 0.995)
     val_probs_raw = 0.75 * header_prior_va + 0.25 * cnn_p_va
-    val_probs_raw[amb_va] = 0.55 * cnn_p_va[amb_va] + 0.45 * oof_tab_va[amb_va]
+    val_probs_raw[amb_va] = 0.35 * cnn_p_va[amb_va] + 0.65 * oof_tab_va[amb_va]
 
     header_prior_te = np.where(M_te[:, 7] == 1.0, 0.005, 0.995)
     test_probs_raw = 0.75 * header_prior_te + 0.25 * cnn_p_te
-    test_probs_raw[amb_te] = 0.55 * cnn_p_te[amb_te] + 0.45 * te_tab_amb
+    test_probs_raw[amb_te] = 0.35 * cnn_p_te[amb_te] + 0.65 * te_tab_amb
 
     raw_metrics = compute_metrics(y_va, val_probs_raw >= 0.5)
     print(f"Per-Image GPU Hybrid Val Accuracy (No Leak):  {raw_metrics['accuracy']:.4f} | F1: {raw_metrics['f1']:.4f}")
