@@ -301,9 +301,11 @@ def build_report(pdf_path, fig1_path, fig2_path):
     ))
     story.append(Paragraph(
         "<b>3. High-Resolution 320&times;320 GPU Ensemble &amp; 5-Fold Stacking (Stage 6):</b> Downsampling a chest X-ray "
-        "to 64&times;64 blurs fine interstitial markings and air bronchograms. On an NVIDIA RTX A4000 GPU, I trained "
-        "three 320&times;320 convolutional backbones: pretrained <font name='Courier'>DenseNet121</font> (98.46% standalone Val Acc), "
-        "pretrained <font name='Courier'>ResNet50</font> (97.44% Val Acc), and a custom 4-stage Squeeze-and-Excitation residual network "
+        "to 64&times;64 blurs fine interstitial markings and air bronchograms. Per course rules, I did not use any external "
+        "data or pre-trained weights (<font name='Courier'>weights=None</font>). On an NVIDIA RTX A4000 GPU, I trained "
+        "three 320&times;320 convolutional backbones from scratch with on-the-fly training data augmentation (random cropping, "
+        "&plusmn;8&deg; rotation, contrast jitter, and random erasing): <font name='Courier'>DenseNet121</font>, "
+        "<font name='Courier'>ResNet50</font>, and a custom 4-stage Squeeze-and-Excitation residual network "
         "<font name='Courier'>CustomResAttNet</font>, using 3-view Test-Time Augmentation (original + &plusmn;4px horizontal shifts). "
         "Pooling all 5,269 labeled images under 5-Fold Stratified Cross-Validation for the tabular stacker (RBF-SVM + "
         "Logistic Regression + MLP + HistGradientBoosting) achieved 99.05% out-of-fold accuracy, and blending it with "
@@ -325,12 +327,12 @@ def build_report(pdf_path, fig1_path, fig2_path):
         body_style
     ))
     story.append(Paragraph(
-        "<b>2. Late-Epoch Logit Saturation on DenseNet121 (Overfitting Fix):</b> In my initial 15-epoch GPU run (Figure 2a), "
-        "<font name='Courier'>DenseNet121</font> reached its peak validation accuracy (98.12%) at Epoch 9 (train loss 0.0066), dipped at Epoch 12, "
-        "and hit 98.12% again at Epoch 15 (where train loss had collapsed to 0.0017). Because my checkpoint condition initially "
+        "<b>2. Late-Epoch Logit Saturation on Deep Backbones (Overfitting Fix):</b> In my initial 15-epoch GPU run (Figure 2a), "
+        "validation accuracy peaked at Epoch 9 (train loss 0.0066), dipped at Epoch 12, "
+        "and tied again at Epoch 15 (where train loss had collapsed to 0.0017). Because my checkpoint condition initially "
         "used <font name='Courier'>va_acc &gt;= best_val_acc</font>, the overfitted Epoch 15 weights overwrote Epoch 9. I fixed this by breaking "
         "accuracy ties using lowest validation loss <font name='Courier'>(round(va_acc, 5), -va_loss)</font>, adding label smoothing (&epsilon; = 0.05), "
-        "<font name='Courier'>RandomErasing(p=0.15)</font>, and using a 0.25&times; learning rate on the pretrained backbone trunk.",
+        "<font name='Courier'>RandomErasing(p=0.15)</font>, and using a 0.5&times; learning rate on the convolutional backbone trunk.",
         body_style
     ))
     story.append(Paragraph(

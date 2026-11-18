@@ -230,18 +230,17 @@ class CustomResAttNet(nn.Module):
 
 
 class BackboneWrapper(nn.Module):
-    def __init__(self, arch="densenet121", emb_dim=128, pretrained=True):
+    """Convolutional backbone initialized from scratch (weights=None) per course guidelines."""
+    def __init__(self, arch="densenet121", emb_dim=128):
         super().__init__()
         self.arch = arch
         if arch == "densenet121":
-            weights = models.DenseNet121_Weights.DEFAULT if pretrained else None
-            net = models.densenet121(weights=weights)
+            net = models.densenet121(weights=None)
             in_features = net.classifier.in_features
             net.classifier = nn.Identity()
             self.backbone = net
         elif arch == "resnet50":
-            weights = models.ResNet50_Weights.DEFAULT if pretrained else None
-            net = models.resnet50(weights=weights)
+            net = models.resnet50(weights=None)
             in_features = net.fc.in_features
             net.fc = nn.Identity()
             self.backbone = net
@@ -293,14 +292,9 @@ def train_and_extract_gpu_model(
         model = CustomResAttNet(emb_dim=128).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=2e-3)
     else:
-        try:
-            model = BackboneWrapper(arch=arch_name, emb_dim=128, pretrained=True).to(device)
-        except Exception:
-            print(f"Pretrained weights download unavailable; initializing {arch_name} from scratch.")
-            model = BackboneWrapper(arch=arch_name, emb_dim=128, pretrained=False).to(device)
-        # Differential learning rate prevents pretrained trunk from memorizing training noise
+        model = BackboneWrapper(arch=arch_name, emb_dim=128).to(device)
         optimizer = torch.optim.AdamW([
-            {"params": model.backbone.parameters(), "lr": lr * 0.25},
+            {"params": model.backbone.parameters(), "lr": lr * 0.5},
             {"params": model.proj.parameters(), "lr": lr},
             {"params": model.head.parameters(), "lr": lr}
         ], weight_decay=5e-3)
